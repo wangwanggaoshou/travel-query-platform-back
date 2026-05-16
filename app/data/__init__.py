@@ -1,0 +1,1 @@
+# World landmarks data package
