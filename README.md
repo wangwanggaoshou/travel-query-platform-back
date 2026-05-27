@@ -4,11 +4,13 @@
 
 ## 技术栈
 
-- Python 3.11+
-- FastAPI - Web 框架
-- SQLAlchemy - ORM
-- SQLite - 数据库
-- uv - 包管理器
+| 技术 | 版本 | 说明 |
+|------|------|------|
+| Python | 3.11+ | 运行环境 |
+| FastAPI | 0.115+ | Web 框架 |
+| SQLAlchemy | 2.0+ | ORM |
+| SQLite | - | 数据库 |
+| uv | - | 包管理器 |
 
 ## 快速开始
 
@@ -50,37 +52,174 @@ uv run uvicorn app.main:app --reload --port 8080
 ```
 back-end/
 ├── app/
-│   ├── main.py          # FastAPI 入口
-│   ├── config.py        # 配置管理
-│   ├── database.py      # 数据库连接
-│   ├── models/          # SQLAlchemy 模型
-│   ├── schemas/         # Pydantic 模式
-│   ├── api/             # API 路由
-│   ├── services/        # 业务逻辑层
-│   └── utils/           # 工具函数
-├── crawler/             # 爬虫模块
+│   ├── main.py              # FastAPI 入口
+│   ├── config.py            # 配置管理（环境变量）
+│   ├── database.py          # 数据库连接
+│   │
+│   ├── api/                 # API 路由
+│   │   ├── scenic.py        # 景点模块（列表/详情/搜索/分类/热门/推荐/AI Agent）
+│   │   ├── guide.py         # 攻略模块（AI Agent 状态/生成）
+│   │   ├── globe.py         # 3D地球模块（国家/地标/坐标解析/图片）
+│   │   └── user.py          # 用户模块（登录/注册/信息/偏好/签证）
+│   │
+│   ├── models/              # SQLAlchemy 模型
+│   │   ├── scenic.py        # 景点模型
+│   │   ├── guide.py         # 攻略模型
+│   │   ├── user.py          # 用户模型
+│   │   ├── favorite.py      # 收藏模型
+│   │   └── visa.py          # 签证模型
+│   │
+│   ├── schemas/             # Pydantic 模式
+│   │   ├── scenic.py        # 景点请求/响应
+│   │   ├── guide.py         # 攻略请求/响应
+│   │   ├── recommend.py     # AI 推荐请求
+│   │   └── user.py          # 用户请求/响应
+│   │
+│   ├── services/            # 业务逻辑层
+│   │   ├── scenic_service.py    # 景点服务
+│   │   ├── scenic_discover.py   # 爬虫聚合服务
+│   │   ├── guide_service.py     # 攻略服务
+│   │   ├── recommend_service.py # 推荐服务
+│   │   ├── globe_service.py     # 3D地球服务
+│   │   ├── landmark_images.py   # 地标图片服务
+│   │   └── auth_service.py      # 认证服务
+│   │
+│   ├── agents/              # AI Agent 模块
+│   │   ├── llm.py           # LLM 客户端
+│   │   ├── guide_agent.py   # 攻略生成 Agent
+│   │   ├── recommend_agent.py   # 推荐Agent
+│   │   ├── config.py        # Agent 配置
+│   │   └── tools/           # Agent 工具
+│   │       ├── web_search.py    # 联网搜索
+│   │       └── image_search.py  # 图片搜索
+│   │
+│   ├── data/                # 内置数据
+│   │   └── world_landmarks.py   # 全球地标数据
+│   │
+│   └── utils/               # 工具函数
+│       ├── response.py      # 统一响应格式
+│       └── security.py      # JWT / 密码加密
+│
+├── crawler/                 # 爬虫模块
 ├── data/
-│   ├── travel.db        # SQLite 数据库
-│   ├── seed.py          # 种子数据脚本
-│   └── seeds/           # 种子数据 JSON
-└── pyproject.toml       # 项目配置
+│   ├── travel.db            # SQLite 数据库
+│   ├── seed.py              # 种子数据脚本
+│   └── seeds/               # 种子数据 JSON
+│
+└── pyproject.toml           # 项目配置
 ```
 
-## API 接口
+## API 模块
 
-| 模块 | 路径 | 说明 |
+| 模块 | 路径前缀 | 说明 |
+|------|----------|------|
+| 景点 | `/scenic` | 列表、详情、搜索、分类、热门、推荐、AI Agent 推荐 |
+| 攻略 | `/guide` | AI Agent 状态、AI 生成攻略 |
+| 3D地球 | `/globe` | 国家列表、坐标解析、地标列表、地标图片 |
+| 用户 | `/user` | 登录、注册、信息管理、偏好、签证（已预留，前端未对接） |
+
+### 主要接口
+
+#### 景点模块
+
+| 方法 | 路径 | 说明 |
 |------|------|------|
-| 用户 | `/user/*` | 登录、注册、信息管理、偏好、签证 |
-| 景点 | `/scenic/*` | 列表、详情、搜索、分类、收藏 |
-| 攻略 | `/guide/*` | 列表、详情、搜索、分类、**AI Agent 生成** |
+| GET | `/scenic/list` | 景点列表（分页、筛选、排序） |
+| GET | `/scenic/detail/{id}` | 景点详情 |
+| GET | `/scenic/search` | 搜索景点（支持爬虫聚合扩展） |
+| GET | `/scenic/categories` | 景点分类列表 |
+| GET | `/scenic/hot` | 热门景点 |
+| GET | `/scenic/recommend` | 基础推荐 |
+| GET | `/scenic/recommend/agent/status` | AI Agent 配置状态 |
+| POST | `/scenic/recommend/agent` | AI Agent 智能推荐 |
 
-### 攻略 Agent
+#### 攻略模块
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/guide/agent/status` | AI Agent 配置状态 |
+| POST | `/guide/generate` | AI 生成攻略（支持联网搜索） |
+
+#### 3D地球模块
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/globe/countries` | 国家列表 |
+| GET | `/globe/resolve` | 坐标解析国家 |
+| GET | `/globe/landmarks/{country_key}` | 国家地标列表 |
+| GET | `/globe/landmarks/images` | 地标图片搜索 |
+
+## AI Agent 配置
 
 在 `back-end/.env` 中配置（留空则前端显示「待配置」，无法生成）：
 
-- `GUIDE_AGENT_LLM_API_KEY` / `GUIDE_AGENT_LLM_BASE_URL` / `GUIDE_AGENT_LLM_MODEL` — OpenAI 兼容大模型
-- `GUIDE_AGENT_WEB_SEARCH_API_KEY` / `GUIDE_AGENT_WEB_SEARCH_PROVIDER` — 联网搜索（`tavily` 或 `serper`）
+### 攻略 Agent
+
+```env
+# 大模型配置（OpenAI 兼容接口）
+GUIDE_AGENT_LLM_API_KEY=your-api-key
+GUIDE_AGENT_LLM_BASE_URL=https://api.deepseek.com
+GUIDE_AGENT_LLM_MODEL=deepseek-chat
+
+# 联网搜索（tavily | serper | google）
+GUIDE_AGENT_WEB_SEARCH_API_KEY=your-search-api-key
+GUIDE_AGENT_WEB_SEARCH_PROVIDER=tavily
+
+# 可选：Google 图片搜索（需 Serper Key）
+GUIDE_AGENT_GOOGLE_API_KEY=your-serper-key
+```
+
+### 推荐 Agent
+
+与攻略 Agent 共用 LLM 配置，无需额外配置。
+
+## 环境变量
+
+完整的环境变量配置示例：
+
+```env
+# 应用配置
+DEBUG=true
+SECRET_KEY=your-secret-key-change-in-production
+
+# 数据库
+DATABASE_URL=sqlite:///./data/travel.db
+
+# 高德 Web 服务 Key
+AMAP_KEY=your-amap-web-service-key
+
+# AI Agent - 大模型
+GUIDE_AGENT_LLM_API_KEY=your-llm-api-key
+GUIDE_AGENT_LLM_BASE_URL=https://api.deepseek.com
+GUIDE_AGENT_LLM_MODEL=deepseek-chat
+
+# AI Agent - 联网搜索
+GUIDE_AGENT_WEB_SEARCH_API_KEY=your-search-api-key
+GUIDE_AGENT_WEB_SEARCH_PROVIDER=tavily
+
+# 可选：Google 图片搜索
+GUIDE_AGENT_GOOGLE_API_KEY=your-serper-key
+GOOGLE_CSE_API_KEY=your-google-cse-key
+GOOGLE_CSE_CX=your-cse-cx
+
+# CORS（前端地址）
+CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+```
+
 ## 测试账号
 
 - 用户名: `test`
 - 密码: `123456`
+
+## 开发说明
+
+### 超时配置
+
+- AI 接口（攻略生成、智能推荐）：120 秒
+- 3D 地球接口（地标列表、坐标解析）：60 秒
+- 地标图片搜索：45 秒
+- 常规接口：15 秒
+
+### 爬虫聚合
+
+搜索景点时，若本地数据库无结果，可启用 `discover=true` 参数，系统将尝试从高德 POI 聚合结果并入库。
