@@ -10,3 +10,7 @@ class RecommendAgentRequest(BaseModel):
     days: int = Field(5, ge=1, le=90)
     customPrompt: Optional[str] = Field(None, max_length=500, description="自定义需求描述")
     limit: int = Field(3, ge=1, le=3)
+
+
+class RecommendMoreRequest(RecommendAgentRequest):
+    excludeIds: list[int] = Field(default_factory=list, description="已推荐过的景点ID列表，排除这些后推荐新的")

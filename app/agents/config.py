@@ -17,5 +17,9 @@ def is_google_images_configured() -> bool:
     return bool(_google_serper_api_key() or _is_google_cse_configured())
 
 
+def is_weather_configured() -> bool:
+    return bool(settings.WEATHER_API_KEY)
+
+
 def is_agent_configured() -> bool:
     return is_llm_configured()

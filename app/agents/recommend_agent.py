@@ -1,4 +1,4 @@
-"""智能推荐 Agent：严格按用户需求从库内筛选并由大模型精选最多 3 个景点。"""
+"""智能推荐 Agent：以"可执行行程"为核心，结合出行方式、耗时、天气、衣物、住宿等维度生成行程预案。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.agents.config import is_agent_configured, is_web_search_configured
+from app.agents.config import is_agent_configured, is_web_search_configured, is_weather_configured
 from app.agents.llm import chat_completion, parse_json_from_llm
 from app.agents.tools.web_search import web_search
 from app.models.scenic import Scenic
@@ -41,21 +41,44 @@ CATEGORY_LABELS = {
     "none": "暂无分类",
 }
 
-RANK_SYSTEM_PROMPT = """你是旅途智览的智能旅行推荐助手。
-用户会给出出发地、旅行类型标签、预算、出行天数和自定义描述。你会收到一批候选景点（可能来自数据库或新发现）。
-请严格挑选与用户真实需求最匹配的景点，最多推荐 3 个；不相关的一律不要选。
-须综合出发地、预算与出行天数评估交通耗时、往返费用与行程是否可行（短途优先周边/同省，长途才推荐远途目的地）。
-每个推荐必须写 matchReason：50～120 字，明确结合出发地、标签、预算、天数或自定义描述说明「为什么适合您」，不要泛泛而谈。
-输出合法 JSON，不要 markdown 代码块：
+RANK_SYSTEM_PROMPT = """你是旅途智览的智能旅行规划助手。
+用户会给出出发地、旅行偏好、预算与出行天数，你会收到一批候选景点（含天气提示）。
+
+你的核心任务是为用户生成一份可执行的行程预案，而不仅仅是筛选景点。对每个推荐景点，必须包含以下完整信息：
+
+1. matchReason（50～120字）：结合出发地、偏好、预算与天数说明推荐理由，并自然带出门票花费（如"门票仅40元""免费参观""无需购票"等）。
+2. tripPlan：一份可直接执行的行程预案，必须覆盖以下五个维度：
+   - transportation：推荐出行方式（高铁/飞机/自驾/大巴/拼车等）、预估单程耗时、往返交通费用估算
+   - weather：根据提供的天气提示或季节常识，描述目的地近期天气概况（温度、晴雨、湿度），并给出出行适宜度判断
+   - clothing：根据天气与活动场景（爬山/海边/城市漫步等）给出具体穿搭建议
+   - accommodation：住宿类型建议（酒店/民宿/青旅/度假村）与每晚预算参考
+   - itinerary：按天列出的简明日程，每天 1-3 项核心活动，确保节奏合理、可执行
+
+行程可行性约束：
+- 短途（1-3天）优先推荐周边/同省目的地，长途（5天+）才考虑远途
+- 总费用（往返交通 + 住宿 + 门票 + 餐饮）须在用户预算范围内
+- 行程节奏与出行天数匹配，避免过度紧凑或松散
+
+输出合法 JSON（不要 markdown 代码块）：
 {
   "picks": [
-    {"scenicId": 1, "matchReason": "结合用户需求的具体理由…"}
+    {
+      "scenicId": 1,
+      "matchReason": "结合用户需求的具体理由…",
+      "tripPlan": {
+        "transportation": {"mode": "高铁", "duration": "约3小时", "costEstimate": "往返约600元"},
+        "weather": "10月中旬气温10-20℃，晴间多云，适宜出行",
+        "clothing": "薄外套+长裤，早晚温差大建议带冲锋衣",
+        "accommodation": "景区周边舒适型酒店，约200-300元/晚",
+        "itinerary": ["Day1: 到达+入住+周边漫步", "Day2: 主景区深度游"]
+      }
+    }
   ],
-  "summary": "一句整体说明"
+  "summary": "整体行程概览说明，概括推荐思路与总预算范围"
 }
 若无合适景点，picks 返回空数组。"""
 
-SUGGEST_NAMES_PROMPT = """你是旅途智览的智能旅行推荐助手。
+SUGGEST_NAMES_PROMPT = """你是旅途智览的智能旅行规划助手。
 根据用户出发地、旅行偏好、预算与出行天数，推荐从该出发地出发可合理到达的国内景点/目的地名称，用于后续入库。
 必须严格贴合用户需求，不要推荐无关热门地；短途行程勿推荐过远目的地。
 输出合法 JSON：
@@ -82,11 +105,13 @@ class RecommendAgent:
         days: int,
         custom_prompt: Optional[str] = None,
         limit: int = MAX_RECOMMEND,
+        exclude_ids: Optional[set[int]] = None,
     ) -> dict[str, Any]:
         limit = min(max(1, limit), MAX_RECOMMEND)
         departure_city = (departure_city or "").strip()
         custom_prompt = (custom_prompt or "").strip()
         travel_styles = [s.strip() for s in (travel_styles or []) if s and s.strip()]
+        exclude_ids = exclude_ids or set()
         user_context = RecommendAgent._format_user_context(
             departure_city, travel_styles, budget_min, budget_max, days, custom_prompt
         )
@@ -99,6 +124,7 @@ class RecommendAgent:
             budget_max=budget_max,
             days=days,
             custom_prompt=custom_prompt,
+            exclude_ids=exclude_ids,
         )
         from_web = 0
 
@@ -113,7 +139,7 @@ class RecommendAgent:
                 days=days,
                 custom_prompt=custom_prompt,
                 need=limit - len(candidates),
-                seen_ids={s.id for s in candidates},
+                seen_ids={s.id for s in candidates} | exclude_ids,
             )
             for scenic, created in discovered:
                 candidates.append(scenic)
@@ -140,7 +166,8 @@ class RecommendAgent:
             if sid not in scenic_by_id or not reason:
                 continue
             item = scenic_by_id[sid]
-            final_list.append(RecommendAgent._to_payload(item, reason))
+            trip_plan = pick.get("tripPlan") if isinstance(pick.get("tripPlan"), dict) else None
+            final_list.append(RecommendAgent._to_payload(item, reason, trip_plan))
             if len(final_list) >= limit:
                 break
 
@@ -191,13 +218,15 @@ class RecommendAgent:
         budget_max: float,
         days: int,
         custom_prompt: str,
+        exclude_ids: Optional[set[int]] = None,
     ) -> list[Scenic]:
         categories: list[str] = []
         for style in travel_styles:
             categories.extend(TRAVEL_STYLE_TO_CATEGORY.get(style, []))
         categories = list(set(categories))
 
-        seen: set[int] = set()
+        exclude_ids = exclude_ids or set()
+        seen: set[int] = set(exclude_ids)
         items: list[Scenic] = []
 
         def add_rows(rows: list[Scenic]) -> None:
@@ -332,9 +361,22 @@ class RecommendAgent:
         user_context: str,
         limit: int,
     ) -> tuple[list[dict], str]:
+        # 并行获取所有候选景点的天气信息
+        weather_map: dict[int, Optional[str]] = {}
+        if is_weather_configured():
+            import asyncio
+            tasks = {s.id: RecommendAgent._fetch_weather(s.location or s.name) for s in candidates}
+            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            for sid, result in zip(tasks.keys(), results):
+                if isinstance(result, Exception):
+                    weather_map[sid] = None
+                else:
+                    weather_map[sid] = result
+
         catalog = []
         for s in candidates:
             desc = (s.description or "")[:280]
+            weather_hint = weather_map.get(s.id) or "（季节常识推断）"
             catalog.append({
                 "scenicId": s.id,
                 "name": s.name,
@@ -342,12 +384,13 @@ class RecommendAgent:
                 "location": s.location or "",
                 "price": s.price,
                 "summary": desc,
+                "weatherHint": weather_hint,
             })
 
         user_msg = (
             f"{user_context}\n\n"
-            f"请从以下候选景点中严格挑选最多 {limit} 个最符合用户需求的，"
-            f"并为每个写出结合上述需求的 matchReason：\n"
+            f"请从以下候选景点中挑选最多 {limit} 个最符合用户需求的，"
+            f"并为每个生成完整的行程预案（含出行方式、天气、衣物、住宿、日程）：\n"
             f"{catalog}"
         )
 
@@ -404,8 +447,47 @@ class RecommendAgent:
         return " ".join(parts)
 
     @staticmethod
-    def _to_payload(item: Scenic, match_reason: str) -> dict:
-        return {
+    async def _fetch_weather(location: str) -> Optional[str]:
+        """获取目的地天气信息（需配置 WEATHER_API_KEY）。"""
+        if not is_weather_configured():
+            return None
+        try:
+            import httpx
+            from app.config import settings
+
+            url = f"{settings.WEATHER_API_BASE_URL}/weather"
+            params = {
+                "q": location,
+                "appid": settings.WEATHER_API_KEY,
+                "units": "metric",
+                "lang": "zh_cn",
+            }
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    weather = data.get("weather", [{}])[0]
+                    main = data.get("main", {})
+                    temp = main.get("temp", "?")
+                    desc = weather.get("description", "未知")
+                    humidity = main.get("humidity")
+                    wind = data.get("wind", {})
+                    wind_speed = wind.get("speed")
+                    parts = [f"{desc}，气温{temp}°C"]
+                    if humidity is not None:
+                        parts.append(f"湿度{humidity}%")
+                    if wind_speed is not None:
+                        parts.append(f"风速{wind_speed}m/s")
+                    return "，".join(parts)
+                else:
+                    logger.warning("天气查询失败(%s): HTTP %s", location, resp.status_code)
+        except Exception as exc:
+            logger.warning("天气查询异常(%s): %s", location, exc)
+        return None
+
+    @staticmethod
+    def _to_payload(item: Scenic, match_reason: str, trip_plan: Optional[dict] = None) -> dict:
+        payload = {
             "id": item.id,
             "name": item.name,
             "category": item.category,
@@ -417,6 +499,9 @@ class RecommendAgent:
             "tags": item.tags or [],
             "matchReason": match_reason,
         }
+        if trip_plan:
+            payload["tripPlan"] = trip_plan
+        return payload
 
     @staticmethod
     def _default_summary(

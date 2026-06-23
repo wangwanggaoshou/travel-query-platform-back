@@ -14,12 +14,25 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _build_chat_url(base_url: str) -> str:
+    """构建 chat/completions URL，自动处理各种常见配置格式。"""
+    base = base_url.strip().rstrip("/")
+    # 如果用户配了完整路径，直接使用，避免重复拼接
+    if base.endswith("/chat/completions"):
+        return base
+    # 去掉可能多余的后缀
+    for suffix in ("/v1",):
+        if base.endswith(suffix):
+            # 保留 /v1，后面再拼 /chat/completions
+            break
+    return f"{base}/chat/completions"
+
+
 async def chat_completion(system: str, user: str) -> str:
     if not is_llm_configured():
         raise RuntimeError("攻略 Agent 大模型未配置")
 
-    base = settings.GUIDE_AGENT_LLM_BASE_URL.rstrip("/")
-    url = f"{base}/chat/completions"
+    url = _build_chat_url(settings.GUIDE_AGENT_LLM_BASE_URL)
     headers = {
         "Authorization": f"Bearer {settings.GUIDE_AGENT_LLM_API_KEY}",
         "Content-Type": "application/json",

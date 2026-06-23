@@ -58,6 +58,48 @@ class RecommendService:
         return success(payload)
 
     @staticmethod
+    async def agent_recommend_more(
+        db: Session,
+        *,
+        departure_city: str,
+        travel_styles: list[str],
+        budget_min: float,
+        budget_max: float,
+        days: int,
+        custom_prompt: Optional[str] = None,
+        limit: int = 3,
+        exclude_ids: Optional[list[int]] = None,
+    ) -> dict:
+        if not RecommendAgent.is_ready():
+            return error(3003, "推荐 Agent 未配置，请设置 GUIDE_AGENT_LLM_API_KEY 与 GUIDE_AGENT_LLM_BASE_URL")
+
+        departure_city = (departure_city or "").strip()
+        if len(departure_city) < 2:
+            return error(400, "请填写出发地")
+
+        if not travel_styles and not (custom_prompt or "").strip():
+            return error(400, "请至少选择旅行类型或填写自定义需求")
+
+        try:
+            payload = await RecommendAgent.recommend(
+                db,
+                departure_city=departure_city,
+                travel_styles=travel_styles,
+                budget_min=budget_min,
+                budget_max=budget_max,
+                days=days,
+                custom_prompt=custom_prompt,
+                limit=limit,
+                exclude_ids=set(exclude_ids or []),
+            )
+        except RuntimeError as exc:
+            return error(3003, str(exc))
+        except Exception as exc:
+            return error(500, f"智能推荐失败: {exc}")
+
+        return success(payload)
+
+    @staticmethod
     def get_scenic_recommend(db: Session, user_id: Optional[int] = None, limit: int = 10) -> dict:
         if user_id:
             user = db.query(User).filter(User.id == user_id).first()

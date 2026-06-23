@@ -1,3 +1,4 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -30,6 +31,10 @@ class Settings(BaseSettings):
     GOOGLE_CSE_API_KEY: str = ""
     GOOGLE_CSE_CX: str = ""
 
+    # 天气 API（OpenWeatherMap 兼容接口，用于智能推荐中获取目的地天气）
+    WEATHER_API_KEY: str = ""
+    WEATHER_API_BASE_URL: str = "https://api.openweathermap.org/data/2.5"
+
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -40,7 +45,7 @@ class Settings(BaseSettings):
     ]
 
     class Config:
-        env_file = ".env"
+        env_file = str(Path(__file__).resolve().parent.parent.parent / ".env")
         extra = "ignore"
 
 

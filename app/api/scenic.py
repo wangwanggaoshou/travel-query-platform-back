@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.database import get_db
-from app.schemas.recommend import RecommendAgentRequest
+from app.schemas.recommend import RecommendAgentRequest, RecommendMoreRequest
 from app.services.scenic_service import ScenicService
 from app.services.recommend_service import RecommendService
 
@@ -69,6 +69,24 @@ async def recommend_scenic_agent(
         days=body.days,
         custom_prompt=body.customPrompt,
         limit=body.limit,
+    )
+
+
+@router.post("/recommend/agent/more")
+async def recommend_scenic_agent_more(
+    body: RecommendMoreRequest,
+    db: Session = Depends(get_db),
+):
+    return await RecommendService.agent_recommend_more(
+        db,
+        departure_city=body.departureCity,
+        travel_styles=body.travelStyles,
+        budget_min=body.budgetMin,
+        budget_max=body.budgetMax,
+        days=body.days,
+        custom_prompt=body.customPrompt,
+        limit=body.limit,
+        exclude_ids=body.excludeIds,
     )
 
 
