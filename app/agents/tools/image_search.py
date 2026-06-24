@@ -53,17 +53,11 @@ def _pick_best(candidates: list[str]) -> Optional[str]:
 
 def _google_serper_api_key() -> str:
     """Serper.dev 提供的 Google 图片/网页搜索 API Key。"""
-    dedicated = (settings.GUIDE_AGENT_GOOGLE_API_KEY or "").strip()
-    if dedicated:
-        return dedicated
     provider = (settings.GUIDE_AGENT_WEB_SEARCH_PROVIDER or "tavily").lower()
     if provider in ("google", "serper"):
         return (settings.GUIDE_AGENT_WEB_SEARCH_API_KEY or "").strip()
     return ""
 
-
-def _is_google_cse_configured() -> bool:
-    return bool((settings.GOOGLE_CSE_API_KEY or "").strip() and (settings.GOOGLE_CSE_CX or "").strip())
 
 
 def _normalize_tag(tag: str) -> bool:
@@ -131,40 +125,6 @@ async def _search_serper_images(
     return urls
 
 
-async def _search_google_cse_images(query: str, max_results: int = 10) -> list[str]:
-    """Google Custom Search JSON API — searchType=image。"""
-    api_key = (settings.GOOGLE_CSE_API_KEY or "").strip()
-    cx = (settings.GOOGLE_CSE_CX or "").strip()
-    if not api_key or not cx:
-        return []
-
-    params = {
-        "key": api_key,
-        "cx": cx,
-        "q": query,
-        "searchType": "image",
-        "num": min(max_results, 10),
-        "safe": "active",
-    }
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        resp = await client.get(
-            "https://www.googleapis.com/customsearch/v1",
-            params=params,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    urls: list[str] = []
-    for item in data.get("items") or []:
-        link = item.get("link")
-        if link:
-            urls.append(link)
-        img = item.get("image") or {}
-        thumb = img.get("thumbnailLink") or img.get("contextLink")
-        if thumb:
-            urls.append(thumb)
-    return urls
-
 
 async def _search_tavily_images(query: str, max_results: int = 8) -> list[str]:
     if not settings.GUIDE_AGENT_WEB_SEARCH_API_KEY:
@@ -195,7 +155,7 @@ async def _search_tavily_images(query: str, max_results: int = 8) -> list[str]:
 
 async def search_web_images_multi(query: str, max_results: int = 10) -> list[str]:
     """
-    多源图片爬取：Google（Serper）→ Google CSE → Tavily（按配置依次尝试并去重）。
+    多源图片爬取：Google（Serper）→ Tavily（按配置依次尝试并去重）。
     """
     seen: set[str] = set()
     collected: list[str] = []
@@ -225,17 +185,7 @@ async def search_web_images_multi(query: str, max_results: int = 10) -> list[str
     if len(collected) >= max_results:
         return collected[:max_results]
 
-    # 2. Google 官方自定义搜索图片 API
-    if _is_google_cse_configured():
-        try:
-            extend(await _search_google_cse_images(query, max_results), "google-cse")
-        except Exception as exc:
-            logger.warning("Google(CSE) 图片搜索失败 (%s): %s", query, exc)
-
-    if len(collected) >= max_results:
-        return collected[:max_results]
-
-    # 3. Tavily（或其它已配置的主搜索）
+    # 2. Tavily（或其它已配置的主搜索）
     provider = (settings.GUIDE_AGENT_WEB_SEARCH_PROVIDER or "tavily").lower()
     if provider == "tavily" and settings.GUIDE_AGENT_WEB_SEARCH_API_KEY:
         try:
@@ -248,7 +198,7 @@ async def search_web_images_multi(query: str, max_results: int = 10) -> list[str
 
 async def _search_web_images(keyword: str) -> list[str]:
     """兼容旧调用：走多源图片搜索。"""
-    if not _google_serper_api_key() and not _is_google_cse_configured() and not settings.GUIDE_AGENT_WEB_SEARCH_API_KEY:
+    if not _google_serper_api_key() and not settings.GUIDE_AGENT_WEB_SEARCH_API_KEY:
         return []
     query = f"{keyword} 旅游 风景 高清"
     return await search_web_images_multi(query, max_results=10)

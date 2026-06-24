@@ -12,9 +12,9 @@ def is_web_search_configured() -> bool:
 
 
 def is_google_images_configured() -> bool:
-    from app.agents.tools.image_search import _google_serper_api_key, _is_google_cse_configured
+    from app.agents.tools.image_search import _google_serper_api_key
 
-    return bool(_google_serper_api_key() or _is_google_cse_configured())
+    return bool(_google_serper_api_key())
 
 
 def is_weather_configured() -> bool:

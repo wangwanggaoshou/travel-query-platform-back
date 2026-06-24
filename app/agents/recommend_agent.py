@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 from sqlalchemy import or_
@@ -44,15 +45,20 @@ CATEGORY_LABELS = {
 RANK_SYSTEM_PROMPT = """你是旅途智览的智能旅行规划助手。
 用户会给出出发地、旅行偏好、预算与出行天数，你会收到一批候选景点（含天气提示）。
 
+重要规则：
+- 用户消息中会明确指出「当前日期」和「Day1 从哪天开始」，行程首日为 Day1（明天）。
+- weatherHint 中的日期为真实天气预报日期（来自 OpenWeatherMap），必须直接引用，严禁假设或编造日期（如"假设7月1日"）。将 weatherHint 中的日期与 Day1-DayN 逐日对齐：Day1 对应预报第一天，Day2 对应第二天，以此类推。
+- itinerary 中每天标注真实日期和星期，如「Day1(6.25周四·晴): 到达+外滩夜景」。
+
 你的核心任务是为用户生成一份可执行的行程预案，而不仅仅是筛选景点。对每个推荐景点，必须包含以下完整信息：
 
 1. matchReason（50～120字）：结合出发地、偏好、预算与天数说明推荐理由，并自然带出门票花费（如"门票仅40元""免费参观""无需购票"等）。
 2. tripPlan：一份可直接执行的行程预案，必须覆盖以下五个维度：
    - transportation：推荐出行方式（高铁/飞机/自驾/大巴/拼车等）、预估单程耗时、往返交通费用估算
-   - weather：根据提供的天气提示或季节常识，描述目的地近期天气概况（温度、晴雨、湿度），并给出出行适宜度判断
-   - clothing：根据天气与活动场景（爬山/海边/城市漫步等）给出具体穿搭建议
+   - weather：直接引用 weatherHint 中的真实日期和天气数据，按天描述变化趋势并给出出行适宜度判断。格式示例：「Day1(6.25周四)：多云，22~30°C，湿度70%，适合傍晚户外；Day2(6.26周五)：阵雨，20~27°C，降水概率60%，建议室内备选」
+   - clothing：根据逐日天气变化与活动场景（爬山/海边/城市漫步等）给出具体穿搭建议，如遇温差大需提示叠穿
    - accommodation：住宿类型建议（酒店/民宿/青旅/度假村）与每晚预算参考
-   - itinerary：按天列出的简明日程，每天 1-3 项核心活动，确保节奏合理、可执行
+   - itinerary：按天列出的简明日程，每天 1-3 项核心活动，格式为「Day1(真实日期+天气): 具体活动」。日程安排需与当天天气严格匹配
 
 行程可行性约束：
 - 短途（1-3天）优先推荐周边/同省目的地，长途（5天+）才考虑远途
@@ -67,10 +73,10 @@ RANK_SYSTEM_PROMPT = """你是旅途智览的智能旅行规划助手。
       "matchReason": "结合用户需求的具体理由…",
       "tripPlan": {
         "transportation": {"mode": "高铁", "duration": "约3小时", "costEstimate": "往返约600元"},
-        "weather": "10月中旬气温10-20℃，晴间多云，适宜出行",
-        "clothing": "薄外套+长裤，早晚温差大建议带冲锋衣",
+        "weather": "Day1(6.25周四)：晴，22~30°C，湿度55%，适宜户外；Day2(6.26周五)：多云转阵雨，20~27°C，降水概率60%，建议备雨具；Day3(6.27周六)：晴，21~31°C，适合主景区深度游",
+        "clothing": "Day1-3 建议短袖+薄外套叠穿，Day2 需备雨衣/折叠伞",
         "accommodation": "景区周边舒适型酒店，约200-300元/晚",
-        "itinerary": ["Day1: 到达+入住+周边漫步", "Day2: 主景区深度游"]
+        "itinerary": ["Day1(6.25周四·晴): 到达+入住+城市漫步赏夜景", "Day2(6.26周五·阵雨): 室内文化场馆+美食街", "Day3(6.27周六·晴): 主景区全天深度游"]
       }
     }
   ],
@@ -156,7 +162,7 @@ class RecommendAgent:
                 "webSearchConfigured": is_web_search_configured(),
             }
 
-        picks, summary = await RecommendAgent._llm_rank_picks(candidates, user_context, limit)
+        picks, summary = await RecommendAgent._llm_rank_picks(candidates, user_context, limit, days)
 
         scenic_by_id = {s.id: s for s in candidates}
         final_list = []
@@ -191,7 +197,14 @@ class RecommendAgent:
         days: int,
         custom_prompt: str,
     ) -> str:
+        import datetime
+        today = datetime.date.today()
+        WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        today_str = f"{today.year}年{today.month}月{today.day}日（{WEEKDAY_CN[today.weekday()]}）"
+        tomorrow = today + datetime.timedelta(days=1)
+        tomorrow_str = f"{tomorrow.month}月{tomorrow.day}日（{WEEKDAY_CN[tomorrow.weekday()]}）"
         lines = [
+            f"当前日期：{today_str}（行程从明天 {tomorrow_str} 开始算 Day1）",
             f"出发地：{departure_city}",
             f"旅行类型标签：{', '.join(travel_styles) if travel_styles else '未选择'}",
             f"预算范围：{budget_min:.0f}～{budget_max:.0f} 元（含交通、住宿、门票等综合预估）",
@@ -207,6 +220,43 @@ class RecommendAgent:
         if budget_min > 0:
             query = query.filter(or_(Scenic.price == 0, Scenic.price >= budget_min))
         return query
+
+    # 已知旅游城市名（用于从 custom_prompt 精确提取目的地）
+    _KNOWN_CITIES: set[str] = {
+        "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "重庆",
+        "西安", "武汉", "长沙", "郑州", "苏州", "天津", "厦门", "青岛",
+        "大连", "昆明", "丽江", "大理", "三亚", "海口", "桂林", "贵阳",
+        "拉萨", "哈尔滨", "沈阳", "济南", "合肥", "南昌", "福州", "南宁",
+        "乌鲁木齐", "呼和浩特", "银川", "兰州", "西宁", "太原", "石家庄",
+        "长春", "宁波", "温州", "珠海", "东莞", "佛山", "无锡", "常州",
+        "扬州", "洛阳", "开封", "黄山", "张家界", "九寨沟", "峨眉山",
+        "秦皇岛", "威海", "烟台", "北海", "延边", "香格里拉", "腾冲",
+        "敦煌", "嘉峪关", "秦皇岛", "承德", "舟山", "婺源", "凤凰",
+    }
+
+    @staticmethod
+    def _extract_destination(custom_prompt: str, departure_city: str) -> str:
+        """从 custom_prompt 中提取目的地城市（与出发地不同时返回）。"""
+        if not custom_prompt:
+            return ""
+
+        # 优先：用已知城市名精确匹配
+        for city in RecommendAgent._KNOWN_CITIES:
+            if city in custom_prompt and city != departure_city:
+                return city
+
+        # 回退：正则匹配「去/到/前往 + XX + 旅游/玩…」
+        m = re.search(
+            r'(?:去|到|前往|想去|想去往)\s*([一-鿿]{2,3}?)\s*(?:玩|旅游|游玩|旅行|逛|转转|看看|度假|自由行)?\s*$',
+            custom_prompt,
+        )
+        if m:
+            city = m.group(1)
+            bad = {"出发", "到达", "目的地", "周边", "附近", "游玩"}
+            if city != departure_city and city not in bad and "周边" not in city and "附近" not in city:
+                return city
+
+        return ""
 
     @staticmethod
     def _gather_candidates(
@@ -275,16 +325,22 @@ class RecommendAgent:
             q = RecommendAgent._apply_budget(q, budget_min, budget_max)
             add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
 
-        if departure_city:
-            like_dep = f"%{departure_city}%"
+        # 目的地优先：从 custom_prompt 提取目的地城市；出发地仅作兜底
+        target_city = departure_city
+        dest = RecommendAgent._extract_destination(custom_prompt, departure_city)
+        if dest:
+            target_city = dest
+
+        if target_city:
+            like_city = f"%{target_city}%"
             q = (
                 db.query(Scenic)
                 .filter(Scenic.is_active == 1)
                 .filter(
                     or_(
-                        Scenic.location.like(like_dep),
-                        Scenic.address.like(like_dep),
-                        Scenic.name.like(like_dep),
+                        Scenic.location.like(like_city),
+                        Scenic.address.like(like_city),
+                        Scenic.name.like(like_city),
                     )
                 )
             )
@@ -360,12 +416,13 @@ class RecommendAgent:
         candidates: list[Scenic],
         user_context: str,
         limit: int,
+        days: int = 3,
     ) -> tuple[list[dict], str]:
         # 并行获取所有候选景点的天气信息
         weather_map: dict[int, Optional[str]] = {}
         if is_weather_configured():
             import asyncio
-            tasks = {s.id: RecommendAgent._fetch_weather(s.location or s.name) for s in candidates}
+            tasks = {s.id: RecommendAgent._fetch_weather(s.location or s.name, days) for s in candidates}
             results = await asyncio.gather(*tasks.values(), return_exceptions=True)
             for sid, result in zip(tasks.keys(), results):
                 if isinstance(result, Exception):
@@ -389,6 +446,8 @@ class RecommendAgent:
 
         user_msg = (
             f"{user_context}\n\n"
+            f"重要：weatherHint 中的日期为 OpenWeatherMap 实时预报的真实日期，请直接引用，严禁编造或假设日期。\n"
+            f"Day1 对应明天（行程首日），Day2 为第二天，以此类推。请将 weatherHint 中的日期与 Day1-Day{days} 逐日对齐。\n\n"
             f"请从以下候选景点中挑选最多 {limit} 个最符合用户需求的，"
             f"并为每个生成完整的行程预案（含出行方式、天气、衣物、住宿、日程）：\n"
             f"{catalog}"
@@ -447,40 +506,90 @@ class RecommendAgent:
         return " ".join(parts)
 
     @staticmethod
-    async def _fetch_weather(location: str) -> Optional[str]:
-        """获取目的地天气信息（需配置 WEATHER_API_KEY）。"""
+    async def _fetch_weather(location: str, days: int = 3) -> Optional[str]:
+        """获取目的地未来 N 天逐日天气预报（需配置 WEATHER_API_KEY；免费版最多 5 天）。"""
         if not is_weather_configured():
             return None
         try:
+            import datetime
+            from collections import Counter
+
             import httpx
             from app.config import settings
 
-            url = f"{settings.WEATHER_API_BASE_URL}/weather"
-            params = {
-                "q": location,
-                "appid": settings.WEATHER_API_KEY,
-                "units": "metric",
-                "lang": "zh_cn",
-            }
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(url, params=params)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    weather = data.get("weather", [{}])[0]
-                    main = data.get("main", {})
-                    temp = main.get("temp", "?")
-                    desc = weather.get("description", "未知")
-                    humidity = main.get("humidity")
-                    wind = data.get("wind", {})
-                    wind_speed = wind.get("speed")
-                    parts = [f"{desc}，气温{temp}°C"]
-                    if humidity is not None:
-                        parts.append(f"湿度{humidity}%")
-                    if wind_speed is not None:
-                        parts.append(f"风速{wind_speed}m/s")
-                    return "，".join(parts)
-                else:
-                    logger.warning("天气查询失败(%s): HTTP %s", location, resp.status_code)
+            async with httpx.AsyncClient(timeout=15) as client:
+                # Step 1: 地理编码 — 中文地名 → 坐标
+                geo_url = "http://api.openweathermap.org/geo/1.0/direct"
+                geo_resp = await client.get(geo_url, params={
+                    "q": (location or "").strip(),
+                    "limit": 1,
+                    "appid": settings.WEATHER_API_KEY,
+                })
+                if geo_resp.status_code != 200 or not geo_resp.json():
+                    logger.warning("天气地理编码失败(%s): HTTP %s", location, geo_resp.status_code)
+                    return None
+                geo = geo_resp.json()[0]
+                lat, lon = geo.get("lat"), geo.get("lon")
+                if lat is None or lon is None:
+                    return None
+
+                # Step 2: 5 天逐 3 小时预报（免费 API 上限 5 天）
+                forecast_days = min(max(1, days), 5)
+                fc_url = f"{settings.WEATHER_API_BASE_URL}/forecast"
+                fc_resp = await client.get(fc_url, params={
+                    "lat": lat,
+                    "lon": lon,
+                    "appid": settings.WEATHER_API_KEY,
+                    "units": "metric",
+                    "lang": "zh_cn",
+                    "cnt": forecast_days * 8,
+                })
+                if fc_resp.status_code != 200:
+                    logger.warning("天气预报查询失败(%s): HTTP %s", location, fc_resp.status_code)
+                    return None
+                data = fc_resp.json()
+
+            # Step 3: 按天聚合 → 每日摘要
+            daily: dict[str, list[dict]] = {}
+            for item in data.get("list") or []:
+                date_str = (item.get("dt_txt") or "").split(" ")[0]
+                if date_str:
+                    daily.setdefault(date_str, []).append(item)
+
+            WEEKDAY = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            lines: list[str] = []
+            for date_str, items in list(daily.items())[:forecast_days]:
+                temps = [it["main"]["temp"] for it in items]
+                descs = [it["weather"][0]["description"] for it in items]
+                hums = [it["main"]["humidity"] for it in items]
+                winds = [it["wind"]["speed"] for it in items]
+                pop_vals = [it.get("pop", 0) for it in items]
+
+                dom = Counter(descs).most_common(1)[0][0]
+                hi, lo = max(temps), min(temps)
+                avg_hum = sum(hums) / len(hums)
+                avg_wind = sum(winds) / len(winds)
+                max_pop = max(pop_vals)
+
+                try:
+                    dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                    wd = WEEKDAY[dt.weekday()]
+                    label = f"{dt.month:02d}.{dt.day:02d}({wd})"
+                except ValueError:
+                    label = date_str
+
+                parts = [f"{label}：{dom}，{lo:.0f}~{hi:.0f}°C"]
+                if avg_hum > 0:
+                    parts.append(f"湿度{avg_hum:.0f}%")
+                if avg_wind > 0:
+                    parts.append(f"风速{avg_wind:.0f}m/s")
+                if max_pop > 0:
+                    parts.append(f"降水概率{max_pop:.0%}")
+                lines.append("，".join(parts))
+
+            if lines:
+                return "\n".join(lines)
+            logger.warning("天气预报数据为空(%s)", location)
         except Exception as exc:
             logger.warning("天气查询异常(%s): %s", location, exc)
         return None

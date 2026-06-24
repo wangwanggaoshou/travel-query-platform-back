@@ -20,16 +20,9 @@ class Settings(BaseSettings):
     GUIDE_AGENT_LLM_BASE_URL: str = ""
     GUIDE_AGENT_LLM_MODEL: str = ""
 
-    # 攻略 Agent — 联网搜索（tavily | serper | google，google/serper 均走 Serper 的 Google 搜索）
+    # 攻略 Agent — 联网搜索（tavily | serper）
     GUIDE_AGENT_WEB_SEARCH_API_KEY: str = ""
     GUIDE_AGENT_WEB_SEARCH_PROVIDER: str = "tavily"
-
-    # 可选：主搜索为 tavily 时，单独配置 Serper Key 以启用 Google 图片爬取
-    GUIDE_AGENT_GOOGLE_API_KEY: str = ""
-
-    # 可选：Google 自定义搜索（Programmable Search Engine）图片
-    GOOGLE_CSE_API_KEY: str = ""
-    GOOGLE_CSE_CX: str = ""
 
     # 天气 API（OpenWeatherMap 兼容接口，用于智能推荐中获取目的地天气）
     WEATHER_API_KEY: str = ""

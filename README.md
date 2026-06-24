@@ -161,12 +161,9 @@ GUIDE_AGENT_LLM_API_KEY=your-api-key
 GUIDE_AGENT_LLM_BASE_URL=https://api.deepseek.com
 GUIDE_AGENT_LLM_MODEL=deepseek-chat
 
-# 联网搜索（tavily | serper | google）
+# 联网搜索（tavily | serper）
 GUIDE_AGENT_WEB_SEARCH_API_KEY=your-search-api-key
 GUIDE_AGENT_WEB_SEARCH_PROVIDER=tavily
-
-# 可选：Google 图片搜索（需 Serper Key）
-GUIDE_AGENT_GOOGLE_API_KEY=your-serper-key
 ```
 
 ### 推荐 Agent
@@ -196,11 +193,6 @@ GUIDE_AGENT_LLM_MODEL=deepseek-chat
 # AI Agent - 联网搜索
 GUIDE_AGENT_WEB_SEARCH_API_KEY=your-search-api-key
 GUIDE_AGENT_WEB_SEARCH_PROVIDER=tavily
-
-# 可选：Google 图片搜索
-GUIDE_AGENT_GOOGLE_API_KEY=your-serper-key
-GOOGLE_CSE_API_KEY=your-google-cse-key
-GOOGLE_CSE_CX=your-cse-cx
 
 # CORS（前端地址）
 CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
