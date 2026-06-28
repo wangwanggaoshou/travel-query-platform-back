@@ -1,0 +1,377 @@
+[
+  {
+    "id": 1,
+    "name": "张家界国家森林公园",
+    "category": "nature",
+    "region": "domestic",
+    "location": "湖南省张家界市",
+    "price": 228,
+    "image": "https://picsum.photos/seed/gcsj-scenic-1/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-1/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-1-alt/800/600"
+    ],
+    "description": "以独特的石英砂岩峰林地貌闻名于世，被誉为\"缩小的仙境，扩大的盆景\"。电影《阿凡达》悬浮山的取景地。",
+    "opening_hours": "07:00-18:00",
+    "best_season": "春秋",
+    "tips": "建议游玩2-3天，可乘坐百龙天梯、天子山索道。避开节假日高峰期。",
+    "latitude": 29.3272,
+    "longitude": 110.4127,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "自然奇观"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 2,
+    "name": "黄山风景区",
+    "category": "mountain",
+    "region": "domestic",
+    "location": "安徽省黄山市",
+    "price": 190,
+    "image": "https://picsum.photos/seed/gcsj-scenic-2/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-2/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-2-alt/800/600"
+    ],
+    "description": "黄山以奇松、怪石、云海、温泉著称，素有\"五岳归来不看山，黄山归来不看岳\"之美誉。",
+    "opening_hours": "06:00-17:30",
+    "best_season": "四季皆宜",
+    "tips": "建议早上登山，傍晚观日落。雨天注意安全，云海奇观最佳。",
+    "latitude": 30.1375,
+    "longitude": 118.1693,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "名山"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 3,
+    "name": "九寨沟风景区",
+    "category": "nature",
+    "region": "domestic",
+    "location": "四川省阿坝州",
+    "price": 169,
+    "image": "https://picsum.photos/seed/gcsj-scenic-3/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-3/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-3-alt/800/600"
+    ],
+    "description": "以翠海、叠瀑、彩林、雪峰、藏情著称，被誉为\"童话世界\"和\"人间仙境\"。",
+    "opening_hours": "07:00-18:00",
+    "best_season": "秋季",
+    "tips": "秋季彩林最美，建议提前预约门票。高原地区注意防晒。",
+    "latitude": 33.26,
+    "longitude": 103.92,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "水景之王"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 4,
+    "name": "故宫博物院",
+    "category": "history",
+    "region": "domestic",
+    "location": "北京市东城区",
+    "price": 60,
+    "image": "https://picsum.photos/seed/gcsj-scenic-4/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-4/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-4-alt/800/600"
+    ],
+    "description": "明清两代皇宫，世界上现存规模最大、保存最完整的木质结构古建筑群。",
+    "opening_hours": "08:30-17:00",
+    "best_season": "四季皆宜",
+    "tips": "建议提前网上预约，避开节假日。游览需3-4小时。",
+    "latitude": 39.9163,
+    "longitude": 116.3972,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "皇家建筑"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 5,
+    "name": "西湖风景区",
+    "category": "city",
+    "region": "domestic",
+    "location": "浙江省杭州市",
+    "price": 0,
+    "image": "https://picsum.photos/seed/gcsj-scenic-5/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-5/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-5-alt/800/600"
+    ],
+    "description": "杭州西湖以秀丽的湖光山色和众多的名胜古迹闻名中外，是中国著名的旅游胜地。",
+    "opening_hours": "全天开放",
+    "best_season": "春秋",
+    "tips": "免费景区，可骑行或步行游览。断桥残雪、三潭印月为必看景点。",
+    "latitude": 30.25,
+    "longitude": 120.15,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "城市名片"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 6,
+    "name": "三亚亚龙湾",
+    "category": "beach",
+    "region": "domestic",
+    "location": "海南省三亚市",
+    "price": 0,
+    "image": "https://picsum.photos/seed/gcsj-scenic-6/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-6/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-6-alt/800/600"
+    ],
+    "description": "被誉为\"天下第一湾\"，拥有7公里长的银白色海滩，海水清澈透明。",
+    "opening_hours": "全天开放",
+    "best_season": "冬季",
+    "tips": "冬季避寒胜地，注意防晒。可体验潜水、冲浪等水上项目。",
+    "latitude": 18.19,
+    "longitude": 109.63,
+    "tags": [
+      "5A景区",
+      "海滨度假",
+      "热带风情"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 7,
+    "name": "迪士尼乐园",
+    "category": "theme_park",
+    "region": "domestic",
+    "location": "上海市浦东新区",
+    "price": 399,
+    "image": "https://picsum.photos/seed/gcsj-scenic-7/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-7/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-7-alt/800/600"
+    ],
+    "description": "中国大陆首座迪士尼主题乐园，融合了纯正的迪士尼风格与中国元素。",
+    "opening_hours": "09:00-21:00",
+    "best_season": "四季皆宜",
+    "tips": "建议购买早享卡，避开周末和节假日。提前下载官方APP查看排队时间。",
+    "latitude": 31.1435,
+    "longitude": 121.657,
+    "tags": [
+      "主题乐园",
+      "亲子游",
+      "网红打卡"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 8,
+    "name": "富士山",
+    "category": "mountain",
+    "region": "overseas",
+    "location": "日本静冈县",
+    "price": 0,
+    "image": "https://picsum.photos/seed/gcsj-scenic-8/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-8/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-8-alt/800/600"
+    ],
+    "description": "日本最高峰，被日本人民誉为\"圣岳\"，是日本民族的象征。",
+    "opening_hours": "全天开放",
+    "best_season": "夏季",
+    "tips": "7-8月为登山季，需要签证。河口湖观景最佳。",
+    "latitude": 35.3606,
+    "longitude": 138.7274,
+    "tags": [
+      "世界遗产",
+      "名山",
+      "日本象征"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 9,
+    "name": "普吉岛",
+    "category": "beach",
+    "region": "overseas",
+    "location": "泰国普吉府",
+    "price": 0,
+    "image": "https://picsum.photos/seed/gcsj-scenic-9/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-9/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-9-alt/800/600"
+    ],
+    "description": "泰国最大岛屿，以其迷人的热带风光和丰富的旅游资源闻名于世。",
+    "opening_hours": "全天开放",
+    "best_season": "11月-4月",
+    "tips": "需要签证或落地签。芭东海滩热闹，卡塔海滩宁静。",
+    "latitude": 7.88,
+    "longitude": 98.388,
+    "tags": [
+      "海岛",
+      "热带风情",
+      "潜水胜地"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 10,
+    "name": "巴黎埃菲尔铁塔",
+    "category": "city",
+    "region": "overseas",
+    "location": "法国巴黎",
+    "price": 26,
+    "image": "https://picsum.photos/seed/gcsj-scenic-10/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-10/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-10-alt/800/600"
+    ],
+    "description": "法国巴黎的标志性建筑，世界著名建筑，法国文化象征之一。",
+    "opening_hours": "09:30-23:45",
+    "best_season": "春秋",
+    "tips": "需要签证。建议傍晚登塔观日落，夜晚欣赏灯光秀。",
+    "latitude": 48.8584,
+    "longitude": 2.2945,
+    "tags": [
+      "地标建筑",
+      "浪漫之都",
+      "欧洲"
+    ],
+    "is_hot": 1
+  },
+  {
+    "id": 11,
+    "name": "长城八达岭",
+    "category": "history",
+    "region": "domestic",
+    "location": "北京市延庆区",
+    "price": 40,
+    "image": "https://picsum.photos/seed/gcsj-scenic-11/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-11/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-11-alt/800/600"
+    ],
+    "description": "万里长城最著名的一段，是明长城中保存最好的一段，被联合国列为世界文化遗产。",
+    "opening_hours": "07:30-17:30",
+    "best_season": "春秋",
+    "tips": "建议早起避开人流，春秋景色最佳。可乘坐缆车。",
+    "latitude": 40.3598,
+    "longitude": 116.02,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "历史古迹"
+    ],
+    "is_hot": 0
+  },
+  {
+    "id": 12,
+    "name": "桂林漓江",
+    "category": "nature",
+    "region": "domestic",
+    "location": "广西桂林市",
+    "price": 210,
+    "image": "https://picsum.photos/seed/gcsj-scenic-12/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-12/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-12-alt/800/600"
+    ],
+    "description": "桂林山水甲天下，漓江是其精华所在。乘船游览，两岸风光如画。",
+    "opening_hours": "08:00-17:00",
+    "best_season": "春秋",
+    "tips": "建议乘坐游船，从桂林到阳朔全程约4小时。",
+    "latitude": 25.274,
+    "longitude": 110.29,
+    "tags": [
+      "5A景区",
+      "山水风光",
+      "漓江风光"
+    ],
+    "is_hot": 0
+  },
+  {
+    "id": 13,
+    "name": "兵马俑博物馆",
+    "category": "history",
+    "region": "domestic",
+    "location": "陕西省西安市",
+    "price": 120,
+    "image": "https://picsum.photos/seed/gcsj-scenic-13/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-13/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-13-alt/800/600"
+    ],
+    "description": "秦始皇兵马俑被誉为\"世界第八大奇迹\"，是中国古代辉煌文明的金字名片。",
+    "opening_hours": "08:30-18:00",
+    "best_season": "四季皆宜",
+    "tips": "建议提前预约，避开节假日。游览需2-3小时。",
+    "latitude": 34.384,
+    "longitude": 109.278,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "历史奇迹"
+    ],
+    "is_hot": 0
+  },
+  {
+    "id": 14,
+    "name": "泰山风景区",
+    "category": "mountain",
+    "region": "domestic",
+    "location": "山东省泰安市",
+    "price": 115,
+    "image": "https://picsum.photos/seed/gcsj-scenic-14/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-14/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-14-alt/800/600"
+    ],
+    "description": "五岳之首，天下第一山。以雄伟壮丽著称，历代帝王封禅之地。",
+    "opening_hours": "全天开放",
+    "best_season": "春秋",
+    "tips": "建议夜爬观日出，或乘坐索道。岱庙也值得游览。",
+    "latitude": 36.26,
+    "longitude": 117.1,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "五岳之首"
+    ],
+    "is_hot": 0
+  },
+  {
+    "id": 15,
+    "name": "鼓浪屿",
+    "category": "city",
+    "region": "domestic",
+    "location": "福建省厦门市",
+    "price": 0,
+    "image": "https://picsum.photos/seed/gcsj-scenic-15/400/300",
+    "images": [
+      "https://picsum.photos/seed/gcsj-scenic-15/800/600",
+      "https://picsum.photos/seed/gcsj-scenic-15-alt/800/600"
+    ],
+    "description": "素有\"海上花园\"之称，岛上建筑风格多样，充满文艺气息。",
+    "opening_hours": "全天开放",
+    "best_season": "春秋",
+    "tips": "需乘轮渡上岛，建议避开周末。日光岩观全岛最佳。",
+    "latitude": 24.45,
+    "longitude": 118.07,
+    "tags": [
+      "世界遗产",
+      "5A景区",
+      "文艺小岛"
+    ],
+    "is_hot": 0
+  }
+]
