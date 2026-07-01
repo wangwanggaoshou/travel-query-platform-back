@@ -506,6 +506,25 @@ class RecommendAgent:
         return " ".join(parts)
 
     @staticmethod
+    def _shorten_location(location: str) -> str:
+        """精简地名：厦门市思明区 → 厦门 / 成都市锦江区 → 成都，提高 OWM 地理编码命中率。"""
+        loc = (location or "").strip()
+        # 去掉"区/县/镇/乡"后缀
+        for suffix in ("区", "县", "镇", "乡", "街道", "自治州"):
+            if loc.endswith(suffix):
+                # 找上一级地名分隔符
+                for sep in ("市", "省", "地区"):
+                    if sep in loc:
+                        idx = loc.rfind(sep)
+                        shortened = loc[:idx + 1]
+                        if len(shortened) >= 2:
+                            return shortened
+        # 若含"市"，截到市名
+        if "市" in loc:
+            return loc.split("市")[0] + "市"
+        return loc
+
+    @staticmethod
     async def _fetch_weather(location: str, days: int = 3) -> Optional[str]:
         """获取目的地未来 N 天逐日天气预报（需配置 WEATHER_API_KEY；免费版最多 5 天）。"""
         if not is_weather_configured():
@@ -518,13 +537,20 @@ class RecommendAgent:
             from app.config import settings
 
             async with httpx.AsyncClient(timeout=15) as client:
-                # Step 1: 地理编码 — 中文地名 → 坐标
+                # Step 1: 地理编码 — 中文地名 → 坐标（先精准，不行再精简）
                 geo_url = "http://api.openweathermap.org/geo/1.0/direct"
-                geo_resp = await client.get(geo_url, params={
-                    "q": (location or "").strip(),
-                    "limit": 1,
-                    "appid": settings.WEATHER_API_KEY,
-                })
+                raw_loc = (location or "").strip()
+                for geo_query in (raw_loc, RecommendAgent._shorten_location(raw_loc)):
+                    if not geo_query:
+                        continue
+                    geo_resp = await client.get(geo_url, params={
+                        "q": geo_query,
+                        "limit": 1,
+                        "appid": settings.WEATHER_API_KEY,
+                    })
+                    if geo_resp.status_code == 200 and geo_resp.json():
+                        break
+
                 if geo_resp.status_code != 200 or not geo_resp.json():
                     logger.warning("天气地理编码失败(%s): HTTP %s", location, geo_resp.status_code)
                     return None
