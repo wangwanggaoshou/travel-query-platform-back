@@ -1,4 +1,4 @@
-"""搜索无结果时：高德 POI + 维基媒体写入国内景点数据。"""
+"""搜索无结果时：高德 POI + 百度百科 + 维基导游写入国内景点数据。"""
 
 from __future__ import annotations
 
@@ -36,7 +36,9 @@ from crawler.amap_client import (
 
 )
 
-from crawler.mediawiki import resolve_wikipedia, resolve_wikivoyage
+from crawler.baike import resolve_baidu_baike
+
+from crawler.mediawiki import resolve_wikivoyage
 
 
 
@@ -106,13 +108,20 @@ async def _fetch_all(kw: str, city: str | None):
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=40.0) as client:
 
-        wiki = await resolve_wikipedia(client, search_name, loc)
+        # 并行请求 百度百科 + Wikivoyage（独立 API，无依赖关系）
+        baike, voy = await asyncio.gather(
+            resolve_baidu_baike(client, search_name, loc),
+            resolve_wikivoyage(client, search_name, loc),
+            return_exceptions=True,
+        )
+        if isinstance(baike, BaseException):
+            baike = None
+        if isinstance(voy, BaseException):
+            voy = None
 
-        voy = await resolve_wikivoyage(client, search_name, loc)
 
 
-
-    return amap, wiki, voy
+    return amap, baike, voy
 
 
 
@@ -262,7 +271,7 @@ def _persist_discovered(
 
         best_season="四季皆宜",
 
-        tips="坐标与地址来自高德地图，介绍来自维基媒体等公开资料，出行前请核实开放时间与票价。",
+        tips="坐标与地址来自高德地图，介绍来自百度百科等公开资料，出行前请核实开放时间与票价。",
 
         latitude=lat,
 
@@ -298,7 +307,7 @@ async def try_discover_scenic_async(
 
 ) -> Tuple[Optional[Scenic], bool]:
 
-    """异步：高德 POI + 维基 → 入库（供 FastAPI async 路由调用）。"""
+    """异步：高德 POI + 百度百科 + 维基导游 → 入库（供 FastAPI async 路由调用）。"""
 
     kw = (keyword or "").strip()
 

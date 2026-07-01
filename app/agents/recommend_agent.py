@@ -389,25 +389,31 @@ class RecommendAgent:
             if custom_prompt:
                 place_names = [custom_prompt[:40]]
 
+        # 并行发现多个景点（每个目的地独立跑 高德+维基）
         discovered: list[tuple[Scenic, bool]] = []
-        for name in place_names[:need + 1]:
-            name = name.strip()
-            if len(name) < 2:
-                continue
-            scenic, created = await try_discover_scenic_async(db, name)
-            if not scenic or scenic.id in seen_ids:
-                continue
-            if created:
-                tags = list(scenic.tags or [])
-                if "智能推荐" not in tags:
-                    tags.append("智能推荐")
-                    scenic.tags = tags
-                    db.commit()
-                    db.refresh(scenic)
-            discovered.append((scenic, created))
-            seen_ids.add(scenic.id)
-            if len(discovered) >= need:
-                break
+        import asyncio
+        names_to_try = [n.strip() for n in place_names[:need + 1] if len(n.strip()) >= 2]
+        if names_to_try:
+            tasks = [try_discover_scenic_async(db, name) for name in names_to_try]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    logger.warning("景点发现异常: %s", result)
+                    continue
+                scenic, created = result
+                if not scenic or scenic.id in seen_ids:
+                    continue
+                if created:
+                    tags = list(scenic.tags or [])
+                    if "智能推荐" not in tags:
+                        tags.append("智能推荐")
+                        scenic.tags = tags
+                        db.commit()
+                        db.refresh(scenic)
+                discovered.append((scenic, created))
+                seen_ids.add(scenic.id)
+                if len(discovered) >= need:
+                    break
 
         return discovered, summary
 
@@ -418,17 +424,29 @@ class RecommendAgent:
         limit: int,
         days: int = 3,
     ) -> tuple[list[dict], str]:
-        # 并行获取所有候选景点的天气信息
+        # 并行获取所有候选景点的天气信息（同城市去重）
         weather_map: dict[int, Optional[str]] = {}
         if is_weather_configured():
             import asyncio
-            tasks = {s.id: RecommendAgent._fetch_weather(s.location or s.name, days) for s in candidates}
+            # 按城市去重，减少冗余 API 调用
+            city_weather: dict[str, Optional[str]] = {}
+            unique_locs: dict[str, str] = {}  # city_key → scenic_id 的代表
+            for s in candidates:
+                city_key = RecommendAgent._shorten_location(s.location or s.name)
+                if city_key not in unique_locs:
+                    unique_locs[city_key] = s.id
+
+            tasks = {
+                city: RecommendAgent._fetch_weather(city, days)
+                for city in unique_locs
+            }
             results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-            for sid, result in zip(tasks.keys(), results):
-                if isinstance(result, Exception):
-                    weather_map[sid] = None
-                else:
-                    weather_map[sid] = result
+            for city, result in zip(tasks.keys(), results):
+                city_weather[city] = None if isinstance(result, Exception) else result
+
+            for s in candidates:
+                city_key = RecommendAgent._shorten_location(s.location or s.name)
+                weather_map[s.id] = city_weather.get(city_key)
 
         catalog = []
         for s in candidates:
@@ -536,7 +554,7 @@ class RecommendAgent:
             import httpx
             from app.config import settings
 
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=8) as client:
                 # Step 1: 地理编码 — 中文地名 → 坐标（先精准，不行再精简）
                 geo_url = "http://api.openweathermap.org/geo/1.0/direct"
                 raw_loc = (location or "").strip()

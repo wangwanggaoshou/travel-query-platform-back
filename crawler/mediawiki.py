@@ -126,7 +126,10 @@ def title_candidates(name: str, location: Optional[str] = None) -> list[str]:
 
 
 async def resolve_wikipedia(client: httpx.AsyncClient, name: str, location: Optional[str]) -> Optional[dict]:
-    for t in title_candidates(name, location):
+    import asyncio
+    for i, t in enumerate(title_candidates(name, location)):
+        if i > 0:
+            await asyncio.sleep(0.3)  # 避免 429 限流
         got = await fetch_zh_wikipedia(client, t)
         if got:
             return got
@@ -134,7 +137,10 @@ async def resolve_wikipedia(client: httpx.AsyncClient, name: str, location: Opti
 
 
 async def resolve_wikivoyage(client: httpx.AsyncClient, name: str, location: Optional[str]) -> Optional[dict]:
-    for t in title_candidates(name, location):
+    import asyncio
+    for i, t in enumerate(title_candidates(name, location)):
+        if i > 0:
+            await asyncio.sleep(0.3)  # 避免 429 限流
         got = await fetch_zh_wikivoyage(client, t)
         if got:
             return got
