@@ -8,7 +8,7 @@ from typing import Any, Optional
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.agents.config import is_agent_configured, is_weather_configured
+from app.agents.config import is_agent_configured, is_weather_configured, is_web_search_configured
 from app.agents.llm import chat_completion, parse_json_from_llm
 from app.models.scenic import Scenic
 from app.services.scenic_discover import try_discover_scenic_async
