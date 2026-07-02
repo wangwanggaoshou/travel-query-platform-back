@@ -32,6 +32,21 @@ TRAVEL_STYLE_TO_CATEGORY: dict[str, list[str]] = {
     "美食之旅": ["city"],
 }
 
+# 从自然语言关键词推断旅行类目（无旅行标签时启用）
+KEYWORD_TO_CATEGORY: dict[str, str] = {
+    "海洋": "beach", "海边": "beach", "沙滩": "beach", "海浪": "beach",
+    "海岛": "beach", "海滨": "beach", "赶海": "beach", "潜水": "beach",
+    "冲浪": "beach", "游泳": "beach", "玩水": "beach", "下水": "beach",
+    "看海": "beach", "大海": "beach", "踏浪": "beach", "戏水": "beach",
+    "爬山": "mountain", "登山": "mountain", "徒步": "mountain",
+    "山景": "mountain", "山峰": "mountain", "高山": "mountain",
+    "古城": "history", "古迹": "history", "遗址": "history",
+    "寺庙": "history", "古镇": "history", "博物馆": "history",
+    "美食": "city", "小吃": "city", "夜市": "city",
+    "游乐园": "theme_park", "乐园": "theme_park",
+    "自然": "nature", "山水": "nature", "瀑布": "nature", "森林": "nature",
+}
+
 CATEGORY_LABELS = {
     "nature": "自然风光",
     "history": "历史古迹",
@@ -130,6 +145,7 @@ class RecommendAgent:
             budget_max=budget_max,
             days=days,
             custom_prompt=custom_prompt,
+            limit=limit,
             exclude_ids=exclude_ids,
         )
         from_web = 0
@@ -234,15 +250,28 @@ class RecommendAgent:
         "敦煌", "嘉峪关", "秦皇岛", "承德", "舟山", "婺源", "凤凰",
     }
 
+    # 排除关键词：表示"不去某地"的否定模式
+    _NEGATE_PATTERNS = [
+        r'(?:不去|不要|别去|不想去|排除|避开|跳过|除了|除开|不去往|不要去)\s*([一-鿿]{2,6}?)\s*(?:[，,。.；;！!、\s]|$)',
+    ]
+
     @staticmethod
     def _extract_destination(custom_prompt: str, departure_city: str) -> str:
         """从 custom_prompt 中提取目的地城市（与出发地不同时返回）。"""
         if not custom_prompt:
             return ""
 
-        # 优先：用已知城市名精确匹配
+        # 先提取否定词中的城市名，后续优先排除
+        excluded_cities: set[str] = set()
+        for pattern in RecommendAgent._NEGATE_PATTERNS:
+            for m in re.finditer(pattern, custom_prompt):
+                city = m.group(1).strip()
+                if city:
+                    excluded_cities.add(city)
+
+        # 优先：用已知城市名精确匹配（排除否定语境中的城市）
         for city in RecommendAgent._KNOWN_CITIES:
-            if city in custom_prompt and city != departure_city:
+            if city in custom_prompt and city != departure_city and city not in excluded_cities:
                 return city
 
         # 回退：正则匹配「去/到/前往 + XX + 旅游/玩…」
@@ -253,7 +282,7 @@ class RecommendAgent:
         if m:
             city = m.group(1)
             bad = {"出发", "到达", "目的地", "周边", "附近", "游玩"}
-            if city != departure_city and city not in bad and "周边" not in city and "附近" not in city:
+            if city != departure_city and city not in bad and "周边" not in city and "附近" not in city and city not in excluded_cities:
                 return city
 
         return ""
@@ -268,12 +297,21 @@ class RecommendAgent:
         budget_max: float,
         days: int,
         custom_prompt: str,
+        limit: int = MAX_RECOMMEND,
         exclude_ids: Optional[set[int]] = None,
     ) -> list[Scenic]:
         categories: list[str] = []
         for style in travel_styles:
             categories.extend(TRAVEL_STYLE_TO_CATEGORY.get(style, []))
         categories = list(set(categories))
+
+        # 未选择旅行标签时，从自定义需求中推断类目（如"想看看海洋"→beach）
+        if not categories and custom_prompt:
+            for keyword, cat in KEYWORD_TO_CATEGORY.items():
+                if keyword in custom_prompt and cat not in categories:
+                    categories.append(cat)
+            if categories:
+                logger.info("从自定义需求推断旅行类目: %s → %s", custom_prompt[:50], categories)
 
         exclude_ids = exclude_ids or set()
         seen: set[int] = set(exclude_ids)
@@ -321,6 +359,13 @@ class RecommendAgent:
             add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
 
         if categories and not custom_prompt:
+            q = db.query(Scenic).filter(Scenic.is_active == 1, Scenic.category.in_(categories))
+            q = RecommendAgent._apply_budget(q, budget_min, budget_max)
+            add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
+
+        # 当 custom_prompt 与 categories 同时存在但文本匹配命中太少时，
+        # 补充按类目搜索（不限制文本），确保"想看看海洋"等自然语言需求不被漏掉
+        if custom_prompt and categories and len(items) < limit:
             q = db.query(Scenic).filter(Scenic.is_active == 1, Scenic.category.in_(categories))
             q = RecommendAgent._apply_budget(q, budget_min, budget_max)
             add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())

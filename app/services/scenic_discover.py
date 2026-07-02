@@ -181,6 +181,10 @@ def _persist_discovered(
 
     display_name = (amap or {}).get("name") or kw
 
+    if any(x in display_name for x in ("学校", "大学", "中学", "小学", "幼儿园", "学院", "校区")):
+
+        return None, False
+
     if display_name != kw:
 
         dup2 = db.query(Scenic).filter(Scenic.is_active == 1, Scenic.name == display_name).first()
@@ -367,6 +371,10 @@ async def try_discover_scenic_async(
 
         return None, False
 
+    if any(x in kw for x in ("学校", "大学", "中学", "小学", "幼儿园", "学院", "校区")):
+
+        return None, False
+
 
 
     try:
@@ -432,6 +440,10 @@ async def try_discover_multiple_async(
     kw = (keyword or "").strip()
 
     if not kw or len(kw) > 80:
+
+        return 0
+
+    if any(x in kw for x in ("学校", "大学", "中学", "小学", "幼儿园", "学院", "校区")):
 
         return 0
 

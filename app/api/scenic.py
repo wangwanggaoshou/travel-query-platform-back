@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+import json
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 from app.database import get_db
 from app.schemas.recommend import RecommendAgentRequest, RecommendMoreRequest
 from app.services.scenic_service import ScenicService
@@ -110,3 +112,44 @@ def get_recommend_scenic(
     db: Session = Depends(get_db),
 ):
     return RecommendService.get_scenic_recommend(db, None, limit)
+
+
+@router.get("/recommend/agent/stream")
+async def recommend_scenic_agent_stream(
+    departureCity: str = Query(...),
+    travelStyles: List[str] = Query(None),
+    budgetMin: float = Query(0.0),
+    budgetMax: float = Query(0.0),
+    days: int = Query(5),
+    customPrompt: Optional[str] = Query(None),
+    limit: int = Query(3),
+    db: Session = Depends(get_db)
+):
+    # If travelStyles is passed as list of query params, FastAPI handles it. 
+    # But sometimes front-end might send travelStyles=A,B or multiple times.
+    # Query(None) will load them as a list of strings if sent like travelStyles=A&travelStyles=B.
+    # If they are comma-separated in a single string, we split it:
+    styles = []
+    if travelStyles:
+        for s in travelStyles:
+            if ',' in s:
+                styles.extend(s.split(','))
+            else:
+                styles.append(s)
+    else:
+        styles = []
+
+    async def event_generator():
+        async for chunk in RecommendService.agent_recommend_stream(
+            db,
+            departure_city=departureCity,
+            travel_styles=styles,
+            budget_min=budgetMin,
+            budget_max=budgetMax,
+            days=days,
+            custom_prompt=customPrompt,
+            limit=limit,
+        ):
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

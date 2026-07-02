@@ -200,3 +200,70 @@ class GlobeService:
             max_images=max_images,
         )
         return success(resolved)
+
+    @staticmethod
+    async def resolve_country_stream(longitude: float, latitude: float):
+        """经纬度 → 逐步生成 AI 探索国家的进度。"""
+        # Yield initial state
+        yield {"step": 0, "progress": 5, "message": "正在定位坐标所处区域..."}
+        await asyncio.sleep(0.05)
+
+        # 1. Reverse geocoding
+        yield {"step": 0, "progress": 15, "message": "正在识别国家/地区..."}
+        key, raw_name = await GlobeService.resolve_country_from_coords(longitude, latitude)
+
+        target_name = None
+        target_key = None
+        target_en = ""
+        flag = "🌍"
+
+        if key:
+            target_key = key
+            meta = COUNTRY_META.get(key, {})
+            target_name = meta.get("name", key)
+            target_en = meta.get("nameEn", key)
+            flag = meta.get("flag", "🌍")
+        elif raw_name:
+            target_name = raw_name
+            target_key = raw_name.lower().replace(" ", "-")
+        else:
+            yield {"error": "无法识别该位置所属国家/地区，请尝试其他区域"}
+            return
+
+        yield {"step": 1, "progress": 30, "message": f"AI 正在联网探索 {target_name}..."}
+
+        # 2. AI discovery
+        ai_attractions = await GlobeAgent.discover_country_attractions(
+            target_name, target_en, limit=MAX_LANDMARKS_PER_COUNTRY
+        )
+
+        if not ai_attractions:
+            yield {"error": f"AI 服务不可用，无法为「{target_name}」发现景点"}
+            return
+
+        yield {"step": 2, "progress": 65, "message": "正在分析生成最佳推荐..."}
+        await asyncio.sleep(0.3)
+
+        # 3. Image enrichment
+        total_attractions = len(ai_attractions)
+        enriched = []
+        for idx, item in enumerate(ai_attractions):
+            name = item.get("name", "景点")
+            progress_val = 70 + int((idx / total_attractions) * 25)
+            yield {"step": 3, "progress": progress_val, "message": f"正在获取「{name}」的精美配图..."}
+
+            enriched_item = await _enrich_landmark(item)
+            enriched.append(enriched_item)
+
+        attractions = [_normalize_landmark(item) for item in enriched]
+
+        # Success payload
+        final_data = {
+            "key": target_key,
+            "name": target_name,
+            "nameEn": target_en,
+            "flag": flag,
+            "attractions": attractions,
+            "source": "ai",
+        }
+        yield {"done": True, "progress": 100, "message": "探索完成！", "result": final_data}

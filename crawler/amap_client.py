@@ -105,6 +105,19 @@ class AmapClient:
         return pois[0] if pois else None
 
     @staticmethod
+    def _is_school(poi: dict[str, Any]) -> bool:
+        name = (poi.get("name") or "").strip()
+        typecode = (poi.get("typecode") or "").strip()
+        if typecode.startswith("1401"):
+            return True
+        type_name = (poi.get("type") or "").strip()
+        if any(x in type_name for x in ("学校", "大学", "中学", "小学", "幼儿园", "学院")):
+            return True
+        if any(x in name for x in ("学校", "大学", "中学", "小学", "幼儿园", "学院", "校区")):
+            return True
+        return False
+
+    @staticmethod
     def pick_best_poi(pois: list[dict[str, Any]], keyword: str) -> Optional[dict[str, Any]]:
         if not pois:
             return None
@@ -133,8 +146,10 @@ class AmapClient:
     ) -> Optional[dict[str, Any]]:
         """解析关键词为最佳 POI，并拉取详情（含图片）。"""
         pois = await self.text_search(keyword, city=city, offset=15)
+        pois = [p for p in pois if not self._is_school(p)]
         if not pois and city:
             pois = await self.text_search(keyword, city=None, city_limit=False, offset=15)
+            pois = [p for p in pois if not self._is_school(p)]
         poi = self.pick_best_poi(pois, keyword)
         if not poi:
             return None
@@ -204,6 +219,7 @@ async def search_amap_pois(
     client = AmapClient(key)
     try:
         pois = await client.text_search(keyword, city=city, offset=min(limit, 20))
+        pois = [p for p in pois if not AmapClient._is_school(p)]
         kw = keyword.strip()
 
         def _score(p):

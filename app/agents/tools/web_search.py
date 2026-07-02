@@ -38,7 +38,7 @@ async def _search_tavily(query: str, max_results: int) -> list[SearchResult]:
         "search_depth": "basic",
         "include_answer": False,
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=5.0)) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -60,7 +60,7 @@ async def _search_serper(query: str, max_results: int) -> list[SearchResult]:
         "Content-Type": "application/json",
     }
     payload = {"q": query, "num": max_results}
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=5.0)) as client:
         resp = await client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()

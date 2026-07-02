@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
+import json
 
 from app.services.globe_service import GlobeService
 
@@ -8,6 +10,18 @@ router = APIRouter(prefix="/globe", tags=["3D地球"])
 @router.get("/countries")
 def list_globe_countries():
     return GlobeService.list_countries()
+
+
+@router.get("/resolve/stream")
+async def resolve_country_stream(
+    lon: float = Query(..., ge=-180, le=180),
+    lat: float = Query(..., ge=-90, le=90),
+):
+    async def event_generator():
+        async for chunk in GlobeService.resolve_country_stream(lon, lat):
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/resolve")
