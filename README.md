@@ -132,6 +132,7 @@ back-end/
 | GET | `/scenic/search` | 搜索景点（支持爬虫聚合扩展） |
 | GET | `/scenic/categories` | 景点分类列表 |
 | GET | `/scenic/hot` | 热门景点 |
+| GET | `/scenic/enrich-images` | 景点图片回退搜索（维基 + 联网） |
 | GET | `/scenic/recommend` | 基础推荐 |
 | GET | `/scenic/recommend/agent/status` | AI Agent 配置状态 |
 | POST | `/scenic/recommend/agent` | AI Agent 智能推荐 |

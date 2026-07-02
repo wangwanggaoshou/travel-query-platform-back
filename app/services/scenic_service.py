@@ -4,6 +4,38 @@ from typing import Optional
 from app.models.scenic import Scenic
 from app.utils.response import success, error, paginated
 
+CATEGORY_LABEL_MAP = {
+    "nature": "自然风光",
+    "history": "历史古迹",
+    "theme_park": "主题乐园",
+    "beach": "海滨度假",
+    "mountain": "山岳景观",
+    "city": "城市观光",
+    "none": "暂无分类",
+}
+
+
+def _category_label(cat: str | None) -> str:
+    if not cat:
+        return ""
+    return CATEGORY_LABEL_MAP.get(cat, cat)
+
+
+def _scenic_item(item: Scenic) -> dict:
+    return {
+        "id": item.id,
+        "name": item.name,
+        "category": item.category,
+        "categoryLabel": _category_label(item.category),
+        "region": item.region,
+        "location": item.location,
+        "price": item.price,
+        "image": item.image,
+        "images": (item.images or [])[:8],
+        "description": item.description,
+        "tags": item.tags or [],
+    }
+
 
 class ScenicService:
     @staticmethod
@@ -15,27 +47,18 @@ class ScenicService:
             query = query.filter(Scenic.category == category)
         if region:
             query = query.filter(Scenic.region == region)
-        if sort_by == "price":
+        if sort_by == "price_asc":
             query = query.order_by(Scenic.price.asc())
+        elif sort_by == "price_desc":
+            query = query.order_by(Scenic.price.desc())
+        elif sort_by == "price":
+            query = query.order_by(Scenic.price.asc())  # 兼容旧参数
         else:
             query = query.order_by(Scenic.id.desc())
 
         total = query.count()
         items = query.offset((page - 1) * page_size).limit(page_size).all()
-
-        scenic_list = []
-        for item in items:
-            scenic_list.append({
-                "id": item.id,
-                "name": item.name,
-                "category": item.category,
-                "region": item.region,
-                "location": item.location,
-                "price": item.price,
-                "image": item.image,
-                "description": item.description,
-                "tags": item.tags or []
-            })
+        scenic_list = [_scenic_item(item) for item in items]
         return success(paginated(scenic_list, total, page, page_size))
 
     @staticmethod
@@ -48,6 +71,7 @@ class ScenicService:
             "id": scenic.id,
             "name": scenic.name,
             "category": scenic.category,
+            "categoryLabel": _category_label(scenic.category),
             "region": scenic.region,
             "location": scenic.location,
             "price": scenic.price,
@@ -68,6 +92,7 @@ class ScenicService:
         page_size: int = 10,
         category: Optional[str] = None,
         region: Optional[str] = None,
+        sort_by: Optional[str] = None,
         discover: bool = False,
         city: Optional[str] = None,
     ) -> dict:
@@ -79,7 +104,6 @@ class ScenicService:
                 or_(
                     Scenic.name.like(like),
                     Scenic.location.like(like),
-                    Scenic.description.like(like),
                     Scenic.address.like(like),
                 )
             )
@@ -91,82 +115,55 @@ class ScenicService:
         total = query.count()
         created_new = False
 
-        if discover and total == 0 and kw:
+        if discover and total < 3 and kw:
             from app.config import settings
-            from app.services.scenic_discover import try_discover_scenic
-            from crawler.amap_client import extract_city_from_location, resolve_amap_scenic
+            from app.services.scenic_discover import try_discover_scenic, try_discover_multiple
+            from crawler.amap_client import extract_city_from_location
             import asyncio
 
             city_hint = (city or "").strip() or extract_city_from_location(kw)
 
-            # 先用高德解析标准名称，再查库；仍无则在线入库
-            if settings.AMAP_KEY:
+            if total == 0:
+                # 完全无结果：精准发现单条
+                _, created_new = try_discover_scenic(db, kw, city=city_hint or None)
+            elif settings.AMAP_KEY:
+                # 已有 1~2 条结果：批量扩展（如搜"长城"已有慕田峪，还需八达岭）
                 try:
-                    amap = asyncio.run(resolve_amap_scenic(kw, city_hint or None))
-                    if amap and amap.get("name"):
-                        canon = amap["name"]
-                        canon_like = f"%{canon}%"
-                        query = db.query(Scenic).filter(Scenic.is_active == 1)
-                        query = query.filter(
-                            or_(
-                                Scenic.name.like(canon_like),
-                                Scenic.location.like(like),
-                                Scenic.description.like(like),
-                            )
-                        )
-                        if category:
-                            query = query.filter(Scenic.category == category)
-                        if region:
-                            query = query.filter(Scenic.region == region)
-                        total = query.count()
+                    added = try_discover_multiple(db, kw, city=city_hint or None, max_new=5)
+                    if added > 0:
+                        created_new = True
                 except Exception:
                     pass
 
-            if total == 0:
-                _, created_new = try_discover_scenic(db, kw, city=city_hint or None)
+            # 重新查询（包含新入库的）
+            if created_new:
                 query = db.query(Scenic).filter(Scenic.is_active == 1)
-                query = query.filter(
-                    or_(
-                        Scenic.name.like(like),
-                        Scenic.location.like(like),
-                        Scenic.description.like(like),
-                        Scenic.address.like(like),
+                if kw:
+                    query = query.filter(
+                        or_(
+                            Scenic.name.like(like),
+                            Scenic.location.like(like),
+                            Scenic.address.like(like),
+                        )
                     )
-                )
                 if category:
                     query = query.filter(Scenic.category == category)
                 if region:
                     query = query.filter(Scenic.region == region)
                 total = query.count()
-                if total == 0 and settings.AMAP_KEY:
-                    try:
-                        amap = asyncio.run(resolve_amap_scenic(kw, city_hint or None))
-                        if amap and amap.get("name"):
-                            canon_like = f"%{amap['name']}%"
-                            query = db.query(Scenic).filter(Scenic.is_active == 1).filter(
-                                Scenic.name.like(canon_like)
-                            )
-                            if category:
-                                query = query.filter(Scenic.category == category)
-                            if region:
-                                query = query.filter(Scenic.region == region)
-                            total = query.count()
-                    except Exception:
-                        pass
+
+        # 排序
+        if sort_by == "price_asc":
+            query = query.order_by(Scenic.price.asc())
+        elif sort_by == "price_desc":
+            query = query.order_by(Scenic.price.desc())
+        elif sort_by == "price":
+            query = query.order_by(Scenic.price.asc())
+        else:
+            query = query.order_by(Scenic.id.desc())
 
         items = query.offset((page - 1) * page_size).limit(page_size).all()
-
-        scenic_list = [{
-            "id": item.id,
-            "name": item.name,
-            "category": item.category,
-            "region": item.region,
-            "location": item.location,
-            "price": item.price,
-            "image": item.image,
-            "description": item.description,
-            "tags": item.tags or []
-        } for item in items]
+        scenic_list = [_scenic_item(item) for item in items]
         payload = paginated(scenic_list, total, page, page_size)
         if discover and created_new:
             payload = {**payload, "discoveredNew": True}
@@ -174,15 +171,6 @@ class ScenicService:
 
     @staticmethod
     def get_categories(db: Session) -> dict:
-        label_map = {
-            "nature": "自然风光",
-            "history": "历史古迹",
-            "theme_park": "主题乐园",
-            "beach": "海滨度假",
-            "mountain": "山岳景观",
-            "city": "城市观光",
-            "none": "暂无分类",
-        }
         rows = (
             db.query(Scenic.category, func.count(Scenic.id))
             .filter(Scenic.is_active == 1)
@@ -191,10 +179,10 @@ class ScenicService:
         )
         counts = {cat: n for cat, n in rows}
         categories = []
-        for value, label in label_map.items():
+        for value, label in CATEGORY_LABEL_MAP.items():
             categories.append({"label": label, "value": value, "count": int(counts.get(value, 0))})
         for cat, n in counts.items():
-            if cat not in label_map:
+            if cat not in CATEGORY_LABEL_MAP:
                 categories.append({"label": cat, "value": cat, "count": int(n)})
         return success({"categories": categories})
 
@@ -213,13 +201,5 @@ class ScenicService:
                 .all()
             )
 
-        scenic_list = [{
-            "id": item.id,
-            "name": item.name,
-            "category": item.category,
-            "location": item.location,
-            "price": item.price,
-            "image": item.image,
-            "description": item.description,
-        } for item in items]
+        scenic_list = [_scenic_item(item) for item in items]
         return success({"list": scenic_list})

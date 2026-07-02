@@ -50,6 +50,7 @@ class GuideService:
         scenic_name: Optional[str] = None,
         location: Optional[str] = None,
         category: Optional[str] = None,
+        cover_image: Optional[str] = None,
     ) -> dict:
         if not GuideAgent.is_ready():
             return error(3002, "攻略 Agent 未配置，请设置 GUIDE_AGENT_LLM_API_KEY 与 GUIDE_AGENT_LLM_BASE_URL")
@@ -77,7 +78,7 @@ class GuideService:
             return error(500, f"攻略生成失败: {exc}")
 
         tags = generated.get("tags") or ["AI生成"]
-        cover = await GuideService._resolve_cover(
+        cover = cover_image or await GuideService._resolve_cover(
             topic,
             tags,
             generated.get("cover"),

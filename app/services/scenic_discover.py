@@ -44,6 +44,38 @@ from crawler.mediawiki import resolve_wikivoyage
 
 
 
+def _extract_relevant(text: str, scenic_name: str, min_chars: int = 2) -> bool:
+
+    """检查百科摘要是否与景点名相关（避免城市词条污染景点描述）。"""
+
+    if not text or not scenic_name:
+
+        return False
+
+    t = text[:400]  # 只看前 400 字符即可判断
+
+    # 景点名完整出现在摘要中 → 相关
+
+    if scenic_name in t:
+
+        return True
+
+    # 去掉常见后缀后检查（如"慕田峪长城" → "慕田峪"）
+
+    for suffix in ("风景区", "景区", "公园", "博物馆", "遗址", "古城", "古镇", "长城", "旅游区"):
+
+        if scenic_name.endswith(suffix) and len(scenic_name) > len(suffix) + min_chars:
+
+            short = scenic_name[: -len(suffix)]
+
+            if short in t:
+
+                return True
+
+    return False
+
+
+
 def _guess_category(keyword: str, amap_type: str | None = None, typecode: str | None = None) -> str:
 
     if (amap_type or "").strip() or (typecode or "").strip():
@@ -161,25 +193,45 @@ def _persist_discovered(
 
     desc_parts = []
 
-    if wiki and wiki.get("extract"):
+    # 百度百科：仅当摘要与景点名相关时才使用（避免回退到城市词条）
 
-        desc_parts.append(wiki["extract"][:2000])
+    wiki_extract = (wiki or {}).get("extract") or ""
+
+    if wiki_extract and _extract_relevant(wiki_extract, display_name):
+
+        desc_parts.append(wiki_extract[:800])
 
     elif amap and amap.get("address"):
 
-        desc_parts.append(f"{display_name}位于{amap.get('location_text') or amap.get('address')}。")
+        desc_parts.append(f"{display_name}位于{amap.get('location_text') or amap.get('address')}，是当地知名旅游目的地。")
 
     if voy and voy.get("extract"):
 
-        ve = voy["extract"][:1500]
+        ve = voy["extract"][:800]
 
-        we = (wiki.get("extract") if wiki else "") or ""
+        if len(ve) > 60 and _extract_relevant(ve, display_name):
 
-        if len(ve) > 80 and ve[:120] not in we:
+            we = (wiki or {}).get("extract") or ""
 
-            desc_parts.append(ve)
+            if ve[:120] not in we:
 
-    description = "\n\n".join(desc_parts) if desc_parts else f"高德地图与国内公开资料整理的「{display_name}」。"
+                desc_parts.append(ve)
+
+    # 无可用描述时生成简洁模板
+
+    if not desc_parts:
+
+        loc_info = (amap or {}).get("location_text") or (amap or {}).get("address") or ""
+
+        if loc_info:
+
+            desc_parts.append(f"{display_name}位于{loc_info}。")
+
+        else:
+
+            desc_parts.append(f"{display_name}，收录自高德地图与国内公开资料。")
+
+    description = "\n\n".join(desc_parts)
 
 
 
@@ -365,4 +417,130 @@ def try_discover_scenic(
 
         return future.result(timeout=90)
 
+
+async def try_discover_multiple_async(
+
+    db: Session, keyword: str, city: str | None = None, max_new: int = 5
+
+) -> int:
+
+    """批量发现：用高德搜索多条 POI，为库中不存在的逐一入库。
+
+    适用于关键字已有一两条结果但仍需扩展的场景（如搜"长城"已有慕田峪，还需八达岭）。
+    """
+
+    kw = (keyword or "").strip()
+
+    if not kw or len(kw) > 80:
+
+        return 0
+
+    from app.config import settings
+
+    if not settings.AMAP_KEY:
+
+        return 0
+
+    from crawler.amap_client import search_amap_pois
+
+    try:
+
+        pois = await search_amap_pois(kw, city=city, limit=10)
+
+    except Exception:
+
+        return 0
+
+    if not pois:
+
+        return 0
+
+    added = 0
+
+    for poi in pois:
+
+        if added >= max_new:
+
+            break
+
+        poi_name = (poi.get("name") or "").strip()
+
+        if not poi_name or len(poi_name) < 2:
+
+            continue
+
+        # 检查是否已存在
+
+        dup = _find_existing(db, poi_name)
+
+        if dup:
+
+            continue
+
+        # 百科 + 维基导游丰富信息（POI 数据已有，不再重复调高德）
+
+        loc = poi.get("location_text") or ""
+
+        try:
+
+            import httpx
+
+            async with httpx.AsyncClient(follow_redirects=True, timeout=40.0) as client:
+
+                baike, voy = await asyncio.gather(
+
+                    resolve_baidu_baike(client, poi_name, loc),
+
+                    resolve_wikivoyage(client, poi_name, loc),
+
+                    return_exceptions=True,
+
+                )
+
+                if isinstance(baike, BaseException):
+
+                    baike = None
+
+                if isinstance(voy, BaseException):
+
+                    voy = None
+
+        except Exception:
+
+            baike, voy = None, None
+
+        scenic, created = _persist_discovered(db, poi_name, poi, baike, voy)
+
+        if created:
+
+            added += 1
+
+    return added
+
+
+def try_discover_multiple(
+
+    db: Session, keyword: str, city: str | None = None, max_new: int = 5
+
+) -> int:
+
+    """同步入口。"""
+
+    try:
+
+        asyncio.get_running_loop()
+
+    except RuntimeError:
+
+        return asyncio.run(try_discover_multiple_async(db, keyword, city, max_new))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+
+        future = pool.submit(
+
+            asyncio.run, try_discover_multiple_async(db, keyword, city, max_new)
+
+        )
+
+        return future.result(timeout=120)
 

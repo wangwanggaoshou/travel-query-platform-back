@@ -40,6 +40,7 @@ class GuideGenerateRequest(BaseModel):
     scenicName: Optional[str] = None
     location: Optional[str] = None
     category: Optional[str] = None
+    coverImage: Optional[str] = None
 
 
 class GuideRecommendItem(GuideItem):

@@ -33,16 +33,30 @@ def search_scenic(
     pageSize: int = Query(10, ge=1, le=50),
     category: Optional[str] = None,
     region: Optional[str] = None,
+    sortBy: Optional[str] = None,
     discover: bool = Query(False, description="无结果时尝试爬虫子系统聚合并入库"),
     city: Optional[str] = Query(None, description="高德搜索限定城市，如「杭州市」"),
     db: Session = Depends(get_db)
 ):
-    return ScenicService.search(db, keyword, page, pageSize, category, region, discover, city)
+    return ScenicService.search(db, keyword, page, pageSize, category, region, sortBy, discover, city)
 
 
 @router.get("/categories")
 def get_scenic_categories(db: Session = Depends(get_db)):
     return ScenicService.get_categories(db)
+
+
+@router.get("/enrich-images")
+async def enrich_scenic_images(
+    name: str = Query(..., min_length=1),
+    location: str | None = Query(None),
+):
+    """为景点补充配图（维基 + 联网搜索），供前端图片加载失败时回退。"""
+    from app.agents.tools.image_search import find_cover_image
+    cover = await find_cover_image(name, scenic_name=name, location=location)
+    if cover:
+        return {"code": 200, "data": {"image": cover, "images": [cover]}}
+    return {"code": 404, "message": "未找到配图", "data": None}
 
 
 @router.get("/hot")

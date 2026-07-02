@@ -192,6 +192,41 @@ async def resolve_amap_scenic(
         await client.close()
 
 
+async def search_amap_pois(
+    keyword: str, city: str | None = None, *, limit: int = 10, api_key: str | None = None
+) -> list[dict[str, Any]]:
+    """批量搜索高德 POI，返回多条结果（不调 place_detail 避免限流，基础字段已够用）。"""
+    from app.config import settings
+
+    key = api_key or settings.AMAP_KEY
+    if not key:
+        return []
+    client = AmapClient(key)
+    try:
+        pois = await client.text_search(keyword, city=city, offset=min(limit, 20))
+        kw = keyword.strip()
+
+        def _score(p):
+            name = (p.get("name") or "").strip()
+            if name == kw:
+                return 100
+            if kw in name:
+                return 60
+            if name in kw:
+                return 40
+            return 0
+
+        sorted_pois = sorted(pois, key=_score, reverse=True)
+        # text_search 已返回 name/location/address/坐标，直接 normalize
+        results = []
+        for p in sorted_pois[:limit]:
+            # 基础字段来自 text_search，不再逐条 place_detail
+            results.append(AmapClient.normalize_poi(p))
+        return results
+    finally:
+        await client.close()
+
+
 def extract_city_from_location(location: str | None) -> Optional[str]:
     """从「湖南省张家界市」类字符串提取城市名供高德 city 参数使用。"""
     if not location:

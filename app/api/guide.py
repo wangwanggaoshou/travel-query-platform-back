@@ -22,4 +22,5 @@ async def generate_guide(body: GuideGenerateRequest, db: Session = Depends(get_d
         scenic_name=body.scenicName,
         location=body.location,
         category=body.category,
+        cover_image=body.coverImage,
     )
