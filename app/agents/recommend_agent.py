@@ -3,49 +3,19 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Optional
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.agents.config import is_agent_configured, is_web_search_configured, is_weather_configured
+from app.agents.config import is_agent_configured, is_weather_configured
 from app.agents.llm import chat_completion, parse_json_from_llm
-from app.agents.tools.web_search import web_search
 from app.models.scenic import Scenic
 from app.services.scenic_discover import try_discover_scenic_async
 
 logger = logging.getLogger(__name__)
 
 MAX_RECOMMEND = 3
-CANDIDATE_POOL = 24
-
-TRAVEL_STYLE_TO_CATEGORY: dict[str, list[str]] = {
-    "自然风光": ["nature"],
-    "历史古迹": ["history"],
-    "海滨度假": ["beach"],
-    "城市观光": ["city"],
-    "主题乐园": ["theme_park"],
-    "山岳徒步": ["mountain", "nature"],
-    "山岳景观": ["mountain"],
-    "文化体验": ["history", "city"],
-    "美食之旅": ["city"],
-}
-
-# 从自然语言关键词推断旅行类目（无旅行标签时启用）
-KEYWORD_TO_CATEGORY: dict[str, str] = {
-    "海洋": "beach", "海边": "beach", "沙滩": "beach", "海浪": "beach",
-    "海岛": "beach", "海滨": "beach", "赶海": "beach", "潜水": "beach",
-    "冲浪": "beach", "游泳": "beach", "玩水": "beach", "下水": "beach",
-    "看海": "beach", "大海": "beach", "踏浪": "beach", "戏水": "beach",
-    "爬山": "mountain", "登山": "mountain", "徒步": "mountain",
-    "山景": "mountain", "山峰": "mountain", "高山": "mountain",
-    "古城": "history", "古迹": "history", "遗址": "history",
-    "寺庙": "history", "古镇": "history", "博物馆": "history",
-    "美食": "city", "小吃": "city", "夜市": "city",
-    "游乐园": "theme_park", "乐园": "theme_park",
-    "自然": "nature", "山水": "nature", "瀑布": "nature", "森林": "nature",
-}
 
 CATEGORY_LABELS = {
     "nature": "自然风光",
@@ -99,15 +69,31 @@ RANK_SYSTEM_PROMPT = """你是旅途智览的智能旅行规划助手。
 }
 若无合适景点，picks 返回空数组。"""
 
-SUGGEST_NAMES_PROMPT = """你是旅途智览的智能旅行规划助手。
-根据用户出发地、旅行偏好、预算与出行天数，推荐从该出发地出发可合理到达的国内景点/目的地名称，用于后续入库。
-必须严格贴合用户需求，不要推荐无关热门地；短途行程勿推荐过远目的地。
-输出合法 JSON：
+AI_RECOMMEND_PROMPT = """你是旅途智览的智能旅行规划助手。
+根据用户的出发地、旅行偏好、预算与出行天数，直接推荐 3～5 个真实存在的国内景点。
+
+关键规则：
+- 只推荐真实存在的中国境内景点/景区/目的地
+- 严格贴合用户需求，包括偏好和排除项（如"不去三亚""避开人多的地方"等必须遵守）
+- 短途（1-3天）优先推荐周边/同省目的地；长途（5天+）可考虑跨省远途
+- 每个景点的名称、所在城市必须真实准确
+- 优先推荐有知名度、适合旅游的景点
+
+输出合法 JSON（不要 markdown 代码块）：
 {
-  "placeNames": ["名称1", "名称2"],
-  "summary": "一句说明"
+  "spots": [
+    {
+      "name": "景点中文名称（如：鼓浪屿）",
+      "location": "所在城市（如：厦门市）",
+      "matchReason": "80～150字推荐理由，结合出发地、偏好、预算、天数说明为什么推荐",
+      "description": "60～120字景点简介，突出特色和游玩亮点",
+      "category": "nature / beach / mountain / history / city / theme_park",
+      "imageQuery": "用于搜索配图的英文关键词（如：Gulangyu Island Xiamen）"
+    }
+  ],
+  "summary": "一句话概括推荐思路"
 }
-placeNames 最多 3 个，仅中国境内真实景点或景区。"""
+若无合适景点，spots 返回空数组。"""
 
 
 class RecommendAgent:
@@ -128,56 +114,40 @@ class RecommendAgent:
         limit: int = MAX_RECOMMEND,
         exclude_ids: Optional[set[int]] = None,
     ) -> dict[str, Any]:
+        """AI-first 推荐：先让 AI 理解需求推荐景点，再查库/爬取，最后生成行程。"""
         limit = min(max(1, limit), MAX_RECOMMEND)
         departure_city = (departure_city or "").strip()
         custom_prompt = (custom_prompt or "").strip()
         travel_styles = [s.strip() for s in (travel_styles or []) if s and s.strip()]
         exclude_ids = exclude_ids or set()
+
         user_context = RecommendAgent._format_user_context(
             departure_city, travel_styles, budget_min, budget_max, days, custom_prompt
         )
 
-        candidates = RecommendAgent._gather_candidates(
-            db,
-            departure_city=departure_city,
-            travel_styles=travel_styles,
-            budget_min=budget_min,
-            budget_max=budget_max,
-            days=days,
-            custom_prompt=custom_prompt,
-            limit=limit,
-            exclude_ids=exclude_ids,
-        )
-        from_web = 0
+        # Step 1: AI 直接根据用户需求推荐景点
+        ai_spots = await RecommendAgent._ai_suggest_spots(user_context, limit)
 
-        if len(candidates) < limit:
-            discovered, _ = await RecommendAgent._discover_for_user(
-                db,
-                user_context=user_context,
-                departure_city=departure_city,
-                travel_styles=travel_styles,
-                budget_min=budget_min,
-                budget_max=budget_max,
-                days=days,
-                custom_prompt=custom_prompt,
-                need=limit - len(candidates),
-                seen_ids={s.id for s in candidates} | exclude_ids,
-            )
-            for scenic, created in discovered:
-                candidates.append(scenic)
-                if created:
-                    from_web += 1
+        if not ai_spots:
+            return {
+                "list": [], "fromDatabase": 0, "fromWeb": 0,
+                "summary": "AI 未找到与您需求匹配的景点，请调整描述后重试",
+                "agentUsed": True, "webSearchConfigured": is_web_search_configured(),
+            }
+
+        # Step 2: 查库匹配 + 缺失爬取
+        candidates, from_web = await RecommendAgent._resolve_spots(
+            db, ai_spots, exclude_ids, limit
+        )
 
         if not candidates:
             return {
-                "list": [],
-                "fromDatabase": 0,
-                "fromWeb": from_web,
+                "list": [], "fromDatabase": 0, "fromWeb": from_web,
                 "summary": "未找到与您需求相符的景点，请调整标签或描述后重试",
-                "agentUsed": True,
-                "webSearchConfigured": is_web_search_configured(),
+                "agentUsed": True, "webSearchConfigured": is_web_search_configured(),
             }
 
+        # Step 3: LLM 排序 + 生成行程预案
         picks, summary = await RecommendAgent._llm_rank_picks(candidates, user_context, limit, days)
 
         scenic_by_id = {s.id: s for s in candidates}
@@ -188,6 +158,7 @@ class RecommendAgent:
             if sid not in scenic_by_id or not reason:
                 continue
             item = scenic_by_id[sid]
+            # 如果 LLM 排序没给 matchReason，用 AI 推荐时生成的
             trip_plan = pick.get("tripPlan") if isinstance(pick.get("tripPlan"), dict) else None
             final_list.append(RecommendAgent._to_payload(item, reason, trip_plan))
             if len(final_list) >= limit:
@@ -203,6 +174,152 @@ class RecommendAgent:
             "agentUsed": True,
             "webSearchConfigured": is_web_search_configured(),
         }
+
+    @staticmethod
+    async def _ai_suggest_spots(user_context: str, limit: int) -> list[dict]:
+        """调用 LLM 直接根据用户需求推荐景点名称与信息。"""
+        user_msg = (
+            f"{user_context}\n\n"
+            f"请推荐最多 {limit} 个最符合用户需求的中国境内真实景点，"
+            f"必须严格贴合用户的偏好和排除项。"
+        )
+        raw = await chat_completion(AI_RECOMMEND_PROMPT, user_msg)
+        data = parse_json_from_llm(raw)
+        spots = data.get("spots") or []
+        if isinstance(spots, dict):
+            spots = [spots]
+        # 基本校验
+        valid = []
+        for s in spots:
+            if not isinstance(s, dict):
+                continue
+            name = (s.get("name") or "").strip()
+            location = (s.get("location") or "").strip()
+            if not name:
+                continue
+            valid.append({
+                "name": name,
+                "location": location,
+                "matchReason": (s.get("matchReason") or "").strip(),
+                "description": (s.get("description") or "").strip(),
+                "category": (s.get("category") or "none").strip(),
+                "imageQuery": (s.get("imageQuery") or name).strip(),
+            })
+        return valid[:limit]
+
+    @staticmethod
+    async def _resolve_spots(
+        db: Session,
+        ai_spots: list[dict],
+        exclude_ids: set[int],
+        limit: int,
+    ) -> tuple[list[Scenic], int]:
+        """查 DB 模糊匹配 + 缺失的联网爬取，返回 Scenic 对象列表。"""
+        candidates: list[Scenic] = []
+        seen_ids: set[int] = set(exclude_ids)
+        from_web = 0
+
+        for spot in ai_spots:
+            if len(candidates) >= limit:
+                break
+
+            name = spot["name"]
+            location = spot.get("location", "")
+
+            # 1) 模糊匹配库内已有景点（按名称）
+            existing = RecommendAgent._fuzzy_find_scenic(db, name, location, seen_ids)
+            if existing:
+                # 合并 AI 生成的 matchReason 和 description（如果库内没有更好的）
+                if spot.get("matchReason"):
+                    setattr(existing, "_ai_match_reason", spot["matchReason"])
+                if spot.get("description") and not existing.description:
+                    existing.description = spot["description"]
+                candidates.append(existing)
+                seen_ids.add(existing.id)
+                continue
+
+            # 2) 库内没有 → 联网爬取
+            try:
+                scenic, created = await try_discover_scenic_async(
+                    db, name, city=location if location else None
+                )
+            except Exception:
+                logger.warning("爬取景点失败: %s (%s)", name, location)
+                continue
+
+            if not scenic or scenic.id in seen_ids:
+                continue
+
+            if created:
+                tags = list(scenic.tags or [])
+                if "AI推荐" not in tags:
+                    tags.append("AI推荐")
+                    scenic.tags = tags
+                    db.commit()
+                    db.refresh(scenic)
+                from_web += 1
+
+            # 合并 AI 信息
+            if spot.get("matchReason"):
+                setattr(scenic, "_ai_match_reason", spot["matchReason"])
+            if spot.get("description") and not scenic.description:
+                scenic.description = spot["description"]
+            if spot.get("category") and spot["category"] != "none" and not scenic.category:
+                scenic.category = spot["category"]
+
+            candidates.append(scenic)
+            seen_ids.add(scenic.id)
+
+        return candidates, from_web
+
+    @staticmethod
+    def _fuzzy_find_scenic(
+        db: Session, name: str, location: str, exclude_ids: set[int]
+    ) -> Optional[Scenic]:
+        """模糊匹配库内景点：先精确名称，再 LIKE，再按地点+名称组合。"""
+        # 精确匹配名称
+        q = (
+            db.query(Scenic)
+            .filter(Scenic.is_active == 1, Scenic.name == name)
+            .filter(~Scenic.id.in_(exclude_ids) if exclude_ids else True)
+        )
+        row = q.first()
+        if row:
+            return row
+
+        # 模糊匹配名称
+        like_name = f"%{name}%"
+        q = (
+            db.query(Scenic)
+            .filter(Scenic.is_active == 1, Scenic.name.like(like_name))
+            .filter(~Scenic.id.in_(exclude_ids) if exclude_ids else True)
+        )
+        row = q.first()
+        if row:
+            return row
+
+        # 按地点 + 名关键词（取 name 前两个字）
+        if location and len(name) >= 2:
+            keyword = name[:2]
+            like_key = f"%{keyword}%"
+            like_loc = f"%{location}%"
+            q = (
+                db.query(Scenic)
+                .filter(Scenic.is_active == 1)
+                .filter(Scenic.name.like(like_key))
+                .filter(
+                    or_(
+                        Scenic.location.like(like_loc),
+                        Scenic.address.like(like_loc),
+                    )
+                )
+                .filter(~Scenic.id.in_(exclude_ids) if exclude_ids else True)
+            )
+            row = q.first()
+            if row:
+                return row
+
+        return None
 
     @staticmethod
     def _format_user_context(
@@ -228,239 +345,6 @@ class RecommendAgent:
             f"自定义需求：{custom_prompt if custom_prompt else '无'}",
         ]
         return "\n".join(lines)
-
-    @staticmethod
-    def _apply_budget(query, budget_min: float, budget_max: float):
-        if budget_max > 0:
-            query = query.filter(or_(Scenic.price == 0, Scenic.price <= budget_max))
-        if budget_min > 0:
-            query = query.filter(or_(Scenic.price == 0, Scenic.price >= budget_min))
-        return query
-
-    # 已知旅游城市名（用于从 custom_prompt 精确提取目的地）
-    _KNOWN_CITIES: set[str] = {
-        "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "重庆",
-        "西安", "武汉", "长沙", "郑州", "苏州", "天津", "厦门", "青岛",
-        "大连", "昆明", "丽江", "大理", "三亚", "海口", "桂林", "贵阳",
-        "拉萨", "哈尔滨", "沈阳", "济南", "合肥", "南昌", "福州", "南宁",
-        "乌鲁木齐", "呼和浩特", "银川", "兰州", "西宁", "太原", "石家庄",
-        "长春", "宁波", "温州", "珠海", "东莞", "佛山", "无锡", "常州",
-        "扬州", "洛阳", "开封", "黄山", "张家界", "九寨沟", "峨眉山",
-        "秦皇岛", "威海", "烟台", "北海", "延边", "香格里拉", "腾冲",
-        "敦煌", "嘉峪关", "秦皇岛", "承德", "舟山", "婺源", "凤凰",
-    }
-
-    # 排除关键词：表示"不去某地"的否定模式
-    _NEGATE_PATTERNS = [
-        r'(?:不去|不要|别去|不想去|排除|避开|跳过|除了|除开|不去往|不要去)\s*([一-鿿]{2,6}?)\s*(?:[，,。.；;！!、\s]|$)',
-    ]
-
-    @staticmethod
-    def _extract_destination(custom_prompt: str, departure_city: str) -> str:
-        """从 custom_prompt 中提取目的地城市（与出发地不同时返回）。"""
-        if not custom_prompt:
-            return ""
-
-        # 先提取否定词中的城市名，后续优先排除
-        excluded_cities: set[str] = set()
-        for pattern in RecommendAgent._NEGATE_PATTERNS:
-            for m in re.finditer(pattern, custom_prompt):
-                city = m.group(1).strip()
-                if city:
-                    excluded_cities.add(city)
-
-        # 优先：用已知城市名精确匹配（排除否定语境中的城市）
-        for city in RecommendAgent._KNOWN_CITIES:
-            if city in custom_prompt and city != departure_city and city not in excluded_cities:
-                return city
-
-        # 回退：正则匹配「去/到/前往 + XX + 旅游/玩…」
-        m = re.search(
-            r'(?:去|到|前往|想去|想去往)\s*([一-鿿]{2,3}?)\s*(?:玩|旅游|游玩|旅行|逛|转转|看看|度假|自由行)?\s*$',
-            custom_prompt,
-        )
-        if m:
-            city = m.group(1)
-            bad = {"出发", "到达", "目的地", "周边", "附近", "游玩"}
-            if city != departure_city and city not in bad and "周边" not in city and "附近" not in city and city not in excluded_cities:
-                return city
-
-        return ""
-
-    @staticmethod
-    def _gather_candidates(
-        db: Session,
-        *,
-        departure_city: str,
-        travel_styles: list[str],
-        budget_min: float,
-        budget_max: float,
-        days: int,
-        custom_prompt: str,
-        limit: int = MAX_RECOMMEND,
-        exclude_ids: Optional[set[int]] = None,
-    ) -> list[Scenic]:
-        categories: list[str] = []
-        for style in travel_styles:
-            categories.extend(TRAVEL_STYLE_TO_CATEGORY.get(style, []))
-        categories = list(set(categories))
-
-        # 未选择旅行标签时，从自定义需求中推断类目（如"想看看海洋"→beach）
-        if not categories and custom_prompt:
-            for keyword, cat in KEYWORD_TO_CATEGORY.items():
-                if keyword in custom_prompt and cat not in categories:
-                    categories.append(cat)
-            if categories:
-                logger.info("从自定义需求推断旅行类目: %s → %s", custom_prompt[:50], categories)
-
-        exclude_ids = exclude_ids or set()
-        seen: set[int] = set(exclude_ids)
-        items: list[Scenic] = []
-
-        def add_rows(rows: list[Scenic]) -> None:
-            for row in rows:
-                if row.id not in seen:
-                    seen.add(row.id)
-                    items.append(row)
-
-        if custom_prompt and categories:
-            like = f"%{custom_prompt}%"
-            q = (
-                db.query(Scenic)
-                .filter(Scenic.is_active == 1)
-                .filter(Scenic.category.in_(categories))
-                .filter(
-                    or_(
-                        Scenic.name.like(like),
-                        Scenic.location.like(like),
-                        Scenic.description.like(like),
-                        Scenic.address.like(like),
-                    )
-                )
-            )
-            q = RecommendAgent._apply_budget(q, budget_min, budget_max)
-            add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
-
-        if custom_prompt:
-            like = f"%{custom_prompt}%"
-            q = (
-                db.query(Scenic)
-                .filter(Scenic.is_active == 1)
-                .filter(
-                    or_(
-                        Scenic.name.like(like),
-                        Scenic.location.like(like),
-                        Scenic.description.like(like),
-                        Scenic.address.like(like),
-                    )
-                )
-            )
-            q = RecommendAgent._apply_budget(q, budget_min, budget_max)
-            add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
-
-        if categories and not custom_prompt:
-            q = db.query(Scenic).filter(Scenic.is_active == 1, Scenic.category.in_(categories))
-            q = RecommendAgent._apply_budget(q, budget_min, budget_max)
-            add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
-
-        # 当 custom_prompt 与 categories 同时存在但文本匹配命中太少时，
-        # 补充按类目搜索（不限制文本），确保"想看看海洋"等自然语言需求不被漏掉
-        if custom_prompt and categories and len(items) < limit:
-            q = db.query(Scenic).filter(Scenic.is_active == 1, Scenic.category.in_(categories))
-            q = RecommendAgent._apply_budget(q, budget_min, budget_max)
-            add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(CANDIDATE_POOL).all())
-
-        # 目的地优先：从 custom_prompt 提取目的地城市；出发地仅作兜底
-        target_city = departure_city
-        dest = RecommendAgent._extract_destination(custom_prompt, departure_city)
-        if dest:
-            target_city = dest
-
-        if target_city:
-            like_city = f"%{target_city}%"
-            q = (
-                db.query(Scenic)
-                .filter(Scenic.is_active == 1)
-                .filter(
-                    or_(
-                        Scenic.location.like(like_city),
-                        Scenic.address.like(like_city),
-                        Scenic.name.like(like_city),
-                    )
-                )
-            )
-            q = RecommendAgent._apply_budget(q, budget_min, budget_max)
-            pool = CANDIDATE_POOL if days > 3 else max(8, CANDIDATE_POOL // 2)
-            add_rows(q.order_by(Scenic.view_count.desc(), Scenic.id.desc()).limit(pool).all())
-
-        return items[:CANDIDATE_POOL]
-
-    @staticmethod
-    async def _discover_for_user(
-        db: Session,
-        *,
-        user_context: str,
-        departure_city: str,
-        travel_styles: list[str],
-        budget_min: float,
-        budget_max: float,
-        days: int,
-        custom_prompt: str,
-        need: int,
-        seen_ids: set[int],
-    ) -> tuple[list[tuple[Scenic, bool]], str]:
-        if need <= 0:
-            return [], ""
-
-        place_names: list[str] = []
-        summary = ""
-
-        search_results: list[dict] = []
-        if is_web_search_configured():
-            query = RecommendAgent._build_search_query(
-                departure_city, travel_styles, budget_min, budget_max, days, custom_prompt
-            )
-            try:
-                search_results = await web_search(query, max_results=6)
-            except Exception as exc:
-                logger.warning("推荐联网搜索失败: %s", exc)
-
-        try:
-            place_names, summary = await RecommendAgent._llm_suggest_names(
-                user_context, search_results, need
-            )
-        except Exception as exc:
-            logger.warning("推荐地名生成失败: %s", exc)
-            if custom_prompt:
-                place_names = [custom_prompt[:40]]
-
-        # 并行发现多个景点（每个目的地独立跑 高德+维基）
-        discovered: list[tuple[Scenic, bool]] = []
-        import asyncio
-        names_to_try = [n.strip() for n in place_names[:need + 1] if len(n.strip()) >= 2]
-        if names_to_try:
-            tasks = [try_discover_scenic_async(db, name) for name in names_to_try]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, BaseException):
-                    logger.warning("景点发现异常: %s", result)
-                    continue
-                scenic, created = result
-                if not scenic or scenic.id in seen_ids:
-                    continue
-                if created:
-                    tags = list(scenic.tags or [])
-                    if "智能推荐" not in tags:
-                        tags.append("智能推荐")
-                        scenic.tags = tags
-                        db.commit()
-                        db.refresh(scenic)
-                discovered.append((scenic, created))
-                seen_ids.add(scenic.id)
-                if len(discovered) >= need:
-                    break
-
-        return discovered, summary
 
     @staticmethod
     async def _llm_rank_picks(
@@ -523,50 +407,6 @@ class RecommendAgent:
             picks = []
         summary = (data.get("summary") or "").strip()
         return picks, summary
-
-    @staticmethod
-    async def _llm_suggest_names(
-        user_context: str,
-        search_results: list[dict],
-        need: int,
-    ) -> tuple[list[str], str]:
-        refs = "\n".join(
-            f"- {(r.get('title') or '')}: {(r.get('snippet') or '')[:180]}"
-            for r in search_results[:5]
-        ) or "（无联网摘要）"
-
-        user_msg = (
-            f"{user_context}\n\n"
-            f"需要约 {min(need, MAX_RECOMMEND)} 个最匹配的国内景点名称。\n"
-            f"联网资料：\n{refs}"
-        )
-        raw = await chat_completion(SUGGEST_NAMES_PROMPT, user_msg)
-        data = parse_json_from_llm(raw)
-        names = data.get("placeNames") or []
-        if isinstance(names, str):
-            names = [names]
-        summary = (data.get("summary") or "").strip()
-        return [str(n).strip() for n in names if n and str(n).strip()], summary
-
-    @staticmethod
-    def _build_search_query(
-        departure_city: str,
-        travel_styles: list[str],
-        budget_min: float,
-        budget_max: float,
-        days: int,
-        custom_prompt: str,
-    ) -> str:
-        parts = [f"从{departure_city}出发"]
-        if custom_prompt:
-            parts.append(custom_prompt)
-        if travel_styles:
-            parts.append(" ".join(travel_styles[:4]))
-        parts.append(f"{days}天")
-        if budget_max > 0:
-            parts.append(f"预算{budget_min:.0f}-{budget_max:.0f}元")
-        parts.append("国内旅游景点推荐")
-        return " ".join(parts)
 
     @staticmethod
     def _shorten_location(location: str) -> str:

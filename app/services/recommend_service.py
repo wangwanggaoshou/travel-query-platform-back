@@ -5,8 +5,6 @@ import logging
 
 from app.agents.config import is_web_search_configured, is_weather_configured
 from app.agents.recommend_agent import RecommendAgent, MAX_RECOMMEND
-from app.agents.tools.web_search import web_search
-from app.services.scenic_discover import try_discover_scenic_async
 from app.models.scenic import Scenic
 from app.models.guide import Guide
 from app.utils.response import success, error
@@ -193,108 +191,60 @@ class RecommendService:
             yield {"error": "请至少选择旅行类型或填写自定义需求"}
             return
 
-        # Step 0: Gather candidates
-        yield {"step": 0, "progress": 10, "message": "正在筛选库内候选景点..."}
-        await asyncio.sleep(0.05)
-
         limit = min(max(1, limit), MAX_RECOMMEND)
         travel_styles = [s.strip() for s in (travel_styles or []) if s and s.strip()]
         user_context = RecommendAgent._format_user_context(
             departure_city, travel_styles, budget_min, budget_max, days, custom_prompt
         )
 
-        candidates = RecommendAgent._gather_candidates(
-            db,
-            departure_city=departure_city,
-            travel_styles=travel_styles,
-            budget_min=budget_min,
-            budget_max=budget_max,
-            days=days,
-            custom_prompt=custom_prompt,
-            limit=limit,
-            exclude_ids=set(),
-        )
-        from_web = 0
-
-        # 立即反馈候选结果，避免前端一直显示"正在筛选…"
-        yield {"step": 0, "progress": 15, "message": f"已筛选 {len(candidates)} 个库内候选景点，正在分析匹配度..."}
+        # ── Step 0: AI 理解需求，直接推荐景点 ──
+        yield {"step": 0, "progress": 10, "message": "AI 正在理解你的需求，分析旅行偏好..."}
         await asyncio.sleep(0.05)
 
-        # Step 1 & 2: Discover if needed
-        if len(candidates) < limit:
-            place_names: list[str] = []
-            search_results: list[dict] = []
+        try:
+            ai_spots = await asyncio.wait_for(
+                RecommendAgent._ai_suggest_spots(user_context, limit),
+                timeout=60.0,
+            )
+        except asyncio.TimeoutError:
+            yield {"error": "AI 推荐超时，请稍后重试"}
+            return
 
-            # 快速检查：联网搜索是否可用，不可用则直接跳过避免无意义等待
-            if not is_web_search_configured():
-                yield {"step": 1, "progress": 25, "message": "联网搜索未配置，直接使用库内候选 + AI 分析..."}
-                await asyncio.sleep(0.1)
-            else:
-                yield {"step": 0, "progress": 20, "message": "发现库内景点较少，正在联网搜索目的地建议..."}
+        if not ai_spots:
+            yield {
+                "done": True, "progress": 100, "message": "已完成！",
+                "result": {
+                    "code": 200, "data": {
+                        "list": [], "fromDatabase": 0, "fromWeb": 0,
+                        "summary": "AI 未找到与您需求匹配的景点，请调整描述后重试",
+                        "agentUsed": True,
+                        "webSearchConfigured": is_web_search_configured(),
+                    }
+                }
+            }
+            return
 
-                query = RecommendAgent._build_search_query(
-                    departure_city, travel_styles, budget_min, budget_max, days, custom_prompt
-                )
-                try:
-                    search_results = await asyncio.wait_for(
-                        web_search(query, max_results=6), timeout=12.0
-                    )
-                except (asyncio.TimeoutError, Exception):
-                    yield {"step": 0, "progress": 25, "message": "联网搜索超时，降级为库内 + AI 常识推荐..."}
-                    await asyncio.sleep(0.1)
+        names = [s["name"] for s in ai_spots]
+        yield {"step": 0, "progress": 20, "message": f"AI 已推荐：{'、'.join(names)}，正在匹配库内景点..."}
+        await asyncio.sleep(0.1)
 
-                yield {"step": 1, "progress": 35, "message": "AI 已建议目的地，正在通过高德与维基抓取详情..."}
-                try:
-                    place_names, summary = await asyncio.wait_for(
-                        RecommendAgent._llm_suggest_names(
-                            user_context, search_results, limit - len(candidates)
-                        ), timeout=45.0
-                    )
-                except (asyncio.TimeoutError, Exception) as exc:
-                    logger.warning("LLM 建议地名超时/失败: %s", exc)
-                    if custom_prompt:
-                        place_names = [custom_prompt[:40]]
+        # ── Step 1: 查库匹配 + 缺失爬取 ──
+        candidates, from_web = await RecommendAgent._resolve_spots(
+            db, ai_spots, set(), limit
+        )
 
-            # Parallel discovery（无论联网搜索是否配置，都执行）
-            names_to_try = [n.strip() for n in place_names[:limit - len(candidates) + 1] if len(n.strip()) >= 2]
-            if names_to_try:
-                yield {"step": 2, "progress": 50, "message": f"正在联网发现景点「{'、'.join(names_to_try)}」数据..."}
-                tasks = [try_discover_scenic_async(db, name) for name in names_to_try]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, BaseException):
-                        continue
-                    scenic, created = result
-                    if not scenic:
-                        continue
-                    if created:
-                        tags = list(scenic.tags or [])
-                        if "智能推荐" not in tags:
-                            tags.append("智能推荐")
-                            scenic.tags = tags
-                            db.commit()
-                            db.refresh(scenic)
-                    if scenic.id not in {s.id for s in candidates}:
-                        candidates.append(scenic)
-                        if created:
-                            from_web += 1
-                        if len(candidates) >= limit:
-                            break
+        if from_web > 0:
+            yield {"step": 1, "progress": 40, "message": f"库内匹配 {len(candidates) - from_web} 个，联网抓取 {from_web} 个新景点..."}
         else:
-            yield {"step": 2, "progress": 50, "message": "库内景点充足，正在准备整合推荐计划..."}
-            await asyncio.sleep(0.3)
+            yield {"step": 1, "progress": 40, "message": f"已从库内匹配 {len(candidates)} 个景点，准备生成行程..."}
+        await asyncio.sleep(0.1)
 
         if not candidates:
             yield {
-                "done": True,
-                "progress": 100,
-                "message": "已完成！",
+                "done": True, "progress": 100, "message": "已完成！",
                 "result": {
-                    "code": 200,
-                    "data": {
-                        "list": [],
-                        "fromDatabase": 0,
-                        "fromWeb": 0,
+                    "code": 200, "data": {
+                        "list": [], "fromDatabase": 0, "fromWeb": from_web,
                         "summary": "未找到与您需求相符的景点，请调整标签或描述后重试",
                         "agentUsed": True,
                         "webSearchConfigured": is_web_search_configured(),
@@ -303,8 +253,8 @@ class RecommendService:
             }
             return
 
-        # Step 3: Fetch weather
-        yield {"step": 3, "progress": 70, "message": "正在获取目的地未来天气预报，对齐行程穿搭..."}
+        # ── Step 2: 获取天气 ──
+        yield {"step": 2, "progress": 60, "message": "正在获取目的地未来天气预报..."}
 
         weather_map = {}
         if is_weather_configured():
@@ -334,11 +284,11 @@ class RecommendService:
                 city_key = RecommendAgent._shorten_location(s.location or s.name)
                 weather_map[s.id] = city_weather.get(city_key)
         else:
-            yield {"step": 3, "progress": 72, "message": "天气服务未配置，跳过实时天气查询..."}
+            yield {"step": 2, "progress": 62, "message": "天气服务未配置，跳过实时天气..."}
             await asyncio.sleep(0.1)
 
-        # Step 4: AI Rank & Trip Plan
-        yield {"step": 4, "progress": 85, "message": "AI 正在生成精选行程推荐和建议细节..."}
+        # ── Step 3: AI 生成行程预案 ──
+        yield {"step": 3, "progress": 80, "message": "AI 正在生成详细行程推荐和出行建议..."}
 
         try:
             picks, summary = await asyncio.wait_for(
@@ -346,10 +296,11 @@ class RecommendService:
                 timeout=90.0,
             )
         except asyncio.TimeoutError:
-            logger.warning("LLM 排序超时，使用默认摘要")
+            logger.warning("LLM 行程生成超时")
             picks, summary = [], RecommendAgent._default_summary(
                 departure_city, travel_styles, custom_prompt, 0
             )
+
         scenic_by_id = {s.id: s for s in candidates}
         final_list = []
         for pick in picks:
